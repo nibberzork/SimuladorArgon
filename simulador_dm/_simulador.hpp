@@ -69,7 +69,7 @@ public:
      * @param paso_tiempo Paso de tiempo dt*
      * @param temp_objetivo Temperatura objetivo T*
      */
-    ArgonSimulator(int particulas_por_lado, double densidad_reducida, double paso_tiempo, double temp_objetivo);
+    ArgonSimulator(int particulas_por_lado, double densidad_reducida, double paso_tiempo, double temp_objetivo, unsigned int semilla = 0);
 
     /**
      * @brief Ejecuta la simulación completa
@@ -95,6 +95,7 @@ private:
     SistemaParticulas sistema;     ///< Estado completo del sistema
     double dt;                     ///< Paso de tiempo reducido
     double temp_referencia;        ///< Temperatura objetivo para termostato
+    unsigned int semilla;          ///< Semilla opcional para reproducibilidad
     
     // Constantes físicas de Lennard-Jones
     static constexpr double R_CORTE = 2.5;         ///< Radio de corte rc* 

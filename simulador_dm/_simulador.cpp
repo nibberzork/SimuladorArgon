@@ -32,17 +32,19 @@ ArgonSimulator::ArgonSimulator(
     int particulas_por_lado = 8,
     double densidad_reducida = 0.84, 
     double paso_tiempo = 0.005, 
-    double temp_objetivo = 1.002
+    double temp_objetivo = 1.002,
+    unsigned int semilla
 ) {
     this->dt = paso_tiempo;
     this->temp_referencia = temp_objetivo;
+    this->semilla = semilla;
     
     
     sistema.num_particulas = particulas_por_lado * particulas_por_lado * particulas_por_lado; // N = n^3
     sistema.longitud_caja = std::pow(static_cast<double>(sistema.num_particulas) / densidad_reducida, 1.0/3.0); // L* = (N / rho*)^(1/3)
 
     // Precalcular parámetros de las listas enlazadas
-    sistema.nc = std::max(2, static_cast<int>(std::floor(sistema.longitud_caja / R_CORTE)));
+    sistema.nc = static_cast<int>(std::floor(sistema.longitud_caja / R_CORTE));
     sistema.celda_tam = sistema.longitud_caja / sistema.nc;
 
     const int N = sistema.num_particulas; // Número de partículas
@@ -99,8 +101,8 @@ void ArgonSimulator::inicializar_sistema() {
     
 
     std::random_device rd; // Semilla aleatoria en base a la entropía del hardware
-    std::mt19937 gen(rd()); // Mersenne Twister para generación de números aleatorios
-    std::normal_distribution<double> distribucion(0.0, std::sqrt(temp_referencia)); // Distribución gaussiana
+    std::mt19937 gen(this->semilla != 0 ? this->semilla : rd());
+    std::uniform_real_distribution<double> distribucion(0.0, 1.0);
 
     // Inicializar velocidades aleatorias con distribución de Maxwell-Boltzmann
     for (int i = 0; i < sistema.num_particulas; ++i) {
@@ -129,6 +131,7 @@ void ArgonSimulator::inicializar_sistema() {
             sistema.vy[i] *= factor;
             sistema.vz[i] *= factor;
         }
+        corregir_momento_lineal();
     }
 
     // Inicializar las cell list
@@ -167,10 +170,7 @@ void ArgonSimulator::corregir_momento_lineal() {
     }
 }
 
-/**
- * @brief 
- * 
- */
+
 /**
  * @brief Calcula fuerzas entre todas las partículas usando cell lists O(n)
  * 
@@ -192,6 +192,7 @@ void ArgonSimulator::calcular_fuerzas() {
     const int N = sistema.num_particulas;
     const double L = sistema.longitud_caja;
 
+
     // Reiniciar aceleraciones y energía potencial
     std::fill(sistema.ax.begin(), sistema.ax.end(), 0.0);
     std::fill(sistema.ay.begin(), sistema.ay.end(), 0.0);
@@ -199,44 +200,20 @@ void ArgonSimulator::calcular_fuerzas() {
     sistema.energia_potencial = 0.0;
     sistema.virial = 0.0;   //  r_ij * f^ij, necesario para la presión
 
-    // Usar parámetros precalculados de cell lists
-    const int nc = sistema.nc;
-    const double celda_tam = sistema.celda_tam;
-
-    // Resetear cell lists (inicializar a -1)
-    std::fill(sistema.cabeza.begin(), sistema.cabeza.end(), -1);
-    std::fill(sistema.lista.begin(), sistema.lista.end(), -1);
-
-
-
-    // Construcción de la estructura de listas enlazadas, se toma la última particula
-    // como cabecera y se va enlazando con la partícula anterior
-    for (int i = 0; i < N; ++i) {
-        int cx = static_cast<int>(sistema.rx[i] / celda_tam); // Indice de celda respecto a x
-        int cy = static_cast<int>(sistema.ry[i] / celda_tam); // Indice de celda respecto a y
-        int cz = static_cast<int>(sistema.rz[i] / celda_tam); // Indice de celda respecto a z
-
-        // Si hay particulas en el borde exacto, se debe restar 1 para evitar desbordamiento en lista[]
-        cx = std::min(cx, nc - 1);
-        cy = std::min(cy, nc - 1);
-        cz = std::min(cz, nc - 1);
-
-        const int idx = cx + cy * nc + cz * nc * nc;
-        sistema.lista[i]    = sistema.cabeza[idx];   // el nuevo nodo apunta al anterior primero
-        sistema.cabeza[idx] = i;                     // ahora i es la cabeza de la celda
-    }
 
     // Función para calcular fuerzas entre un par de partículas
     auto calcular_par_fuerzas = [&](int i, int j) {
+
         double dx = sistema.rx[i] - sistema.rx[j];
         double dy = sistema.ry[i] - sistema.ry[j];
         double dz = sistema.rz[i] - sistema.rz[j];
 
-        // Imagen mínima
-        // Si dx > L, entonces round(dx / L) = 1, 2, ... luego hay que restarlo
-        dx -= L * std::round(dx / L); 
+        // Imagen mínima usando redondeo para manejar desplazamientos
+        // mayores que una longitud de caja de forma robusta.
+        dx -= L * std::round(dx / L);
         dy -= L * std::round(dy / L);
         dz -= L * std::round(dz / L);
+
 
         const double r2 = dx*dx + dy*dy + dz*dz;
         if (r2 >= R_CORTE_SQ || r2 < 1e-10) return;
@@ -263,45 +240,86 @@ void ArgonSimulator::calcular_fuerzas() {
         sistema.virial += factor * r2;
     };
 
-    // Semi-vecindad: 13 desplazamientos + celda propia
-    static const int SEMI_NB[13][3] = {
-        // dz = +1 (9 celdas)
-        {-1, -1, +1}, { 0, -1, +1}, {+1, -1, +1},
-        {-1,  0, +1}, { 0,  0, +1}, {+1,  0, +1},
-        {-1, +1, +1}, { 0, +1, +1}, {+1, +1, +1},
-        // dz = 0, dy = +1 (3 celdas)
-        {-1, +1,  0}, { 0, +1,  0}, {+1, +1,  0},
-        // dz = 0, dy = 0, dx = +1 (1 celda)
-        {+1,  0,  0}
-    };
+    const int nc = sistema.nc;
 
-    // Bucle principal sobre celdas
-    for (int cz = 0; cz < nc; ++cz) {
-    for (int cy = 0; cy < nc; ++cy) {
-    for (int cx = 0; cx < nc; ++cx) {
-
-        const int idx_self = cx + cy * nc + cz * nc * nc;
-
-        // Pares dentro de la misma celda (j > i)
-        for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
-        for (int j = sistema.lista[i];         j != -1; j = sistema.lista[j]) {
+    if (nc < 3) {
+        // Si los pares estan muy juntos y no hay espacio se calculan todos los pares
+        for (int i = 0; i < N; ++i)
+        for (int j = i + 1; j < N; ++j)
             calcular_par_fuerzas(i, j);
-        }}
+        return;
+    } else {
+        // Listas de celdas
+        // Aprovechando que las interacciones solo ocurren a < rc, se discretiza el espacio
+        // en celdas de esa longitud de forma que solo se miran las vecinas
+        const double celda_tam = sistema.celda_tam;
 
-        // Pares con las 13 celdas de la semi-vecindad
-        for (int nb = 0; nb < 13; ++nb) {
-            const int nx = (cx + SEMI_NB[nb][0] + nc) % nc;
-            const int ny = (cy + SEMI_NB[nb][1] + nc) % nc;
-            const int nz = (cz + SEMI_NB[nb][2] + nc) % nc;
-            const int idx_nb = nx + ny * nc + nz * nc * nc;
+        // Resetear cell lists (inicializar a -1)
+        std::fill(sistema.cabeza.begin(), sistema.cabeza.end(), -1);
+        std::fill(sistema.lista.begin(), sistema.lista.end(), -1);
 
-            for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
-            for (int j = sistema.cabeza[idx_nb];   j != -1; j = sistema.lista[j]) {
-                calcular_par_fuerzas(i, j);
-            }}
+
+
+        // Construcción de la estructura de listas enlazadas, se toma la última particula
+        // como cabecera y se va enlazando con la partícula anterior
+        for (int i = 0; i < N; ++i) {
+            int cx = static_cast<int>(sistema.rx[i] / celda_tam); // Indice de celda respecto a x
+            int cy = static_cast<int>(sistema.ry[i] / celda_tam); // Indice de celda respecto a y
+            int cz = static_cast<int>(sistema.rz[i] / celda_tam); // Indice de celda respecto a z
+
+            // Si hay particulas en el borde exacto, se debe restar 1 para evitar desbordamiento en lista[]
+            cx = std::min(cx, nc - 1);
+            cy = std::min(cy, nc - 1);
+            cz = std::min(cz, nc - 1);
+
+            const int idx = cx + cy * nc + cz * nc * nc;
+            sistema.lista[i]    = sistema.cabeza[idx];   // el nuevo nodo apunta al anterior primero
+            sistema.cabeza[idx] = i;                     // ahora i es la cabeza de la celda
         }
 
-    }}} // fin bucle celdas cx, cy, cz
+
+        // Semi-vecindad: 13 desplazamientos + celda propia
+        static const int SEMI_NB[13][3] = {
+            // dz = +1 (9 celdas)
+            {-1, -1, +1}, { 0, -1, +1}, {+1, -1, +1},
+            {-1,  0, +1}, { 0,  0, +1}, {+1,  0, +1},
+            {-1, +1, +1}, { 0, +1, +1}, {+1, +1, +1},
+            // dz = 0, dy = +1 (3 celdas)
+            {-1, +1,  0}, { 0, +1,  0}, {+1, +1,  0},
+            // dz = 0, dy = 0, dx = +1 (1 celda)
+            {+1,  0,  0}
+        };
+
+        // Bucle principal sobre celdas
+        for (int cz = 0; cz < nc; ++cz) {
+        for (int cy = 0; cy < nc; ++cy) {
+        for (int cx = 0; cx < nc; ++cx) {
+
+            const int idx_self = cx + cy * nc + cz * nc * nc;
+
+            // Pares dentro de la misma celda (j > i)
+            for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
+            for (int j = sistema.lista[i];         j != -1; j = sistema.lista[j]) {
+                calcular_par_fuerzas(i, j);
+            }}
+
+            // Pares con las 13 celdas de la semi-vecindad
+            for (int nb = 0; nb < 13; ++nb) {
+                const int nx = (cx + SEMI_NB[nb][0] + nc) % nc;
+                const int ny = (cy + SEMI_NB[nb][1] + nc) % nc;
+                const int nz = (cz + SEMI_NB[nb][2] + nc) % nc;
+                const int idx_nb = nx + ny * nc + nz * nc * nc;
+
+                for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
+                for (int j = sistema.cabeza[idx_nb];   j != -1; j = sistema.lista[j]) {
+                    calcular_par_fuerzas(i, j);
+                }}
+            }
+
+        }}} // fin bucle celdas cx, cy, cz
+    }
+
+    
 
     // Presión instantánea (sin corrección de cola)
     const double V = L * L * L;
@@ -339,18 +357,12 @@ void ArgonSimulator::calcular_presion_cola() {
  */
 void ArgonSimulator::aplicar_condiciones_contorno() {
     const double L = sistema.longitud_caja;
-    const double half_L = L * 0.5;
     
     for (int i = 0; i < sistema.num_particulas; ++i) {
-        // Aplicar periodicidad en cada dimensión
-        if (sistema.rx[i] >= half_L) sistema.rx[i] -= L;
-        else if (sistema.rx[i] < -half_L) sistema.rx[i] += L;
-        
-        if (sistema.ry[i] >= half_L) sistema.ry[i] -= L;
-        else if (sistema.ry[i] < -half_L) sistema.ry[i] += L;
-        
-        if (sistema.rz[i] >= half_L) sistema.rz[i] -= L;
-        else if (sistema.rz[i] < -half_L) sistema.rz[i] += L;
+        // Mantener posiciones en [0, L).
+        sistema.rx[i] -= L * std::floor(sistema.rx[i] / L);
+        sistema.ry[i] -= L * std::floor(sistema.ry[i] / L);
+        sistema.rz[i] -= L * std::floor(sistema.rz[i] / L);
     }
 }
 
@@ -381,13 +393,10 @@ void ArgonSimulator::integracion_verlet() {
         sistema.ry[i] += sistema.vy[i] * dt;
         sistema.rz[i] += sistema.vz[i] * dt;
         
-        // Condiciones de contorno
-        if (sistema.rx[i] >= L) sistema.rx[i] -= L;
-        else if (sistema.rx[i] < 0.0) sistema.rx[i] += L;
-        if (sistema.ry[i] >= L) sistema.ry[i] -= L;
-        else if (sistema.ry[i] < 0.0) sistema.ry[i] += L;
-        if (sistema.rz[i] >= L) sistema.rz[i] -= L;
-        else if (sistema.rz[i] < 0.0) sistema.rz[i] += L;
+        // Aplicar PBC en la caja para mantener en [0, L).
+        sistema.rx[i] -= L * std::floor(sistema.rx[i] / L);
+        sistema.ry[i] -= L * std::floor(sistema.ry[i] / L);
+        sistema.rz[i] -= L * std::floor(sistema.rz[i] / L);
     };
 
     // Calcular nuevas fuerzas usando r(t + dt)
@@ -400,6 +409,8 @@ void ArgonSimulator::integracion_verlet() {
         sistema.vy[i] += sistema.ay[i] * half_dt;
         sistema.vz[i] += sistema.az[i] * half_dt;
     };
+
+    corregir_momento_lineal(); // Para corregir los errores numéricos
 }
 
 /**
@@ -485,17 +496,18 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
     for (int paso = 0; paso < config.num_pasos; ++paso) {
         integracion_verlet();  // Avanzar dt
         
+        propiedades_termodinamicas(); // Necesario para poder escalar durante el equilibrado
         // Control de temperatura
         if (paso < config.pasos_equilibrado) {
-            propiedades_termodinamicas();  // Para obtener temperatura
             escalar_velocidades();
-        } else if (paso % config.frecuencia_muestreo == 0) {
-            propiedades_termodinamicas();  // Actualizar propiedades
+            propiedades_termodinamicas();  // Actualizar tras el escalado
+        }
             
+        if (paso % config.frecuencia_muestreo == 0) {
             const double tiempo = paso * dt;
             const double energia_total = sistema.energia_potencial + sistema.energia_cinetica;
             
-            // Llenar vectores con lógica de muestreo (siempre)
+            // Guardar los datos en la estructura
             resultados.pasos.push_back(paso);
             resultados.tiempos.push_back(tiempo);
             resultados.temperaturas.push_back(sistema.temperatura_inst);
