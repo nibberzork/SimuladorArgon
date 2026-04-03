@@ -30,6 +30,7 @@ htmlcov/
 
 # Test generated files
 tests/outputs
+*.tmp/
 
 # CMake / native build artifacts
 CMakeCache.txt
@@ -63,3 +64,6 @@ Thumbs.db
 
 # Local artifacts
 simulador_dm.zip
+
+# Other files
+codigos_nahuel/

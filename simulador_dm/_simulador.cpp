@@ -502,7 +502,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             escalar_velocidades();
             propiedades_termodinamicas();  // Actualizar tras el escalado
         }
-            
+
         if (paso % config.frecuencia_muestreo == 0) {
             const double tiempo = paso * dt;
             const double energia_total = sistema.energia_potencial + sistema.energia_cinetica;

@@ -10,8 +10,9 @@ class Simulador:
                  particulas_por_lado: int = 8,
                  densidad_reducida: float = 0.84,
                  paso_tiempo: float = 0.005,
-                 temp_objetivo: float = 1.002):
-        self._sim = ArgonSimulator(particulas_por_lado, densidad_reducida, paso_tiempo, temp_objetivo)
+                 temp_objetivo: float = 1.002,
+                 seed: int = 0):
+        self._sim = ArgonSimulator(particulas_por_lado, densidad_reducida, paso_tiempo, temp_objetivo, seed)
 
     def ejecutar(self,
                  num_pasos: int = 25000,
