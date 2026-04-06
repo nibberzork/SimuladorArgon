@@ -24,12 +24,15 @@ PYBIND11_MODULE(simulador, m) {
         .def_readwrite("energias_totales", &ResultadosSimulacion::energias_totales);
 
     py::class_<ArgonSimulator>(m, "ArgonSimulator")
-        .def(py::init<int, double, double, double, unsigned int>(),
+        .def(py::init<int, double, double, double, unsigned int, bool, bool, bool>(),
              py::arg("particulas_por_lado") = 8,
              py::arg("densidad_reducida") = 0.84,
              py::arg("paso_tiempo") = 0.005,
              py::arg("temp_objetivo") = 1.002,
-             py::arg("seed") = 0)
+             py::arg("seed") = 0,
+             py::arg("corregir_cm") = true,
+             py::arg("correccion_presion_cola") = true,
+             py::arg("reescalar_velocidades") = true)
         .def("ejecutar", &ArgonSimulator::ejecutar);
 }
 

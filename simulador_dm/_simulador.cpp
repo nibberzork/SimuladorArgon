@@ -10,34 +10,23 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-/**
- * @brief Constructor del simulador de dinámica molecular de Argón
- * 
- * Inicializa el simulador con los parámetros dados en unidades reducidas de Lennard-Jones.
- * Calcula automáticamente el tamaño de la caja, reserva memoria para todas las partículas
- * y precalcula los parámetros de cell lists para optimización O(n).
- * 
- * @param particulas_por_lado Número de partículas por dimensión del cubo (n³ = N total)
- * @param densidad_reducida Densidad reducida ρ* = ρ σ³ (típicamente 0.8-1.2)
- * @param paso_tiempo Paso de tiempo reducido Δt* (típicamente 0.001-0.01)
- * @param temp_objetivo Temperatura objetivo reducida T* (típicamente 1.0-2.0)
- * 
- * @note Las unidades están en términos reducidos de Lennard-Jones donde:
- *       - Longitud: σ (diámetro atómico)
- *       - Energía: ε (profundidad del pozo)
- *       - Masa: m (masa atómica)
- *       - Tiempo: σ√(m/ε)
- */
+// Construye el estado base del simulador y fija los interruptores de estudio.
 ArgonSimulator::ArgonSimulator(
-    int particulas_por_lado = 8,
-    double densidad_reducida = 0.84, 
-    double paso_tiempo = 0.005, 
-    double temp_objetivo = 1.002,
-    unsigned int semilla
+    int particulas_por_lado,
+    double densidad_reducida,
+    double paso_tiempo,
+    double temp_objetivo,
+    unsigned int semilla,
+    bool corregir_cm,
+    bool correccion_presion_cola,
+    bool reescalar_velocidades
 ) {
     this->dt = paso_tiempo;
     this->temp_referencia = temp_objetivo;
     this->semilla = semilla;
+    this->corregir_cm = corregir_cm;
+    this->correccion_presion_cola = correccion_presion_cola;
+    this->reescalar_velocidades = reescalar_velocidades;
     
     
     sistema.num_particulas = particulas_por_lado * particulas_por_lado * particulas_por_lado; // N = n^3
@@ -64,65 +53,52 @@ ArgonSimulator::ArgonSimulator(
     sistema.lista.resize(N);
 }
 
-
-
-/**
- * @brief Inicializa posiciones y velocidades del sistema
- * 
- * Coloca las partículas en una red cúbica simple centrada en el origen
- * y asigna velocidades aleatorias con distribución Maxwell-Boltzmann.
- * Corrige el momento lineal total para evitar deriva del centro de masa.
- * 
- * @note Las posiciones se generan en una malla cúbica uniforme
- * @note Las velocidades siguen distribución gaussiana con varianza T*
- * @warning Debe llamarse después del constructor antes de cualquier simulación
- */
+// Inicializa una configuración cúbica simple y velocidades aleatorias.
 void ArgonSimulator::inicializar_sistema() {
     const int N = sistema.num_particulas; // Número de partículas
     const double L = sistema.longitud_caja; // Longitud de la caja
     
-    // Inicializar posiciones en una red cúbica simple
-    int n = std::cbrt(sistema.num_particulas); // Número de partículas por lado
-    double paso = sistema.longitud_caja / n; // Paso entre partículas
+    // Inicializar posiciones en una red cúbica
+    const int n = std::cbrt(sistema.num_particulas); // Número de partículas por lado
+    const double paso = L / n; // Paso entre partículas
     
     int index = 0;
     for (int i = 0; i < n; ++i) { // Bucle sobre x
-        for (int j = 0; j < n; ++j) { // Bucle sobre y
-            for (int k = 0; k < n; ++k) { // Bucle sobre z
-                if (index < sistema.num_particulas) {
-                    sistema.rx[index] = i * paso;
-                    sistema.ry[index] = j * paso;
-                    sistema.rz[index] = k * paso;
-                    ++index;
-                }
-            }
+    for (int j = 0; j < n; ++j) { // Bucle sobre y
+    for (int k = 0; k < n; ++k) { // Bucle sobre z
+        if (index < sistema.num_particulas) {
+            sistema.rx[index] = i * paso;
+            sistema.ry[index] = j * paso;
+            sistema.rz[index] = k * paso;
+            ++index;
         }
-    }
+    }}}
     
 
-    std::random_device rd; // Semilla aleatoria en base a la entropía del hardware
-    std::mt19937 gen(this->semilla != 0 ? this->semilla : rd());
-    std::uniform_real_distribution<double> distribucion(0.0, 1.0);
+    // std::random_device rd; // Semilla aleatoria en base a la entropía del hardware
+    std::mt19937 gen(this->semilla != 0 ? this->semilla : std::random_device{}());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
 
     // Inicializar velocidades aleatorias con distribución de Maxwell-Boltzmann
     for (int i = 0; i < sistema.num_particulas; ++i) {
-        sistema.vx[i] = distribucion(gen);
-        sistema.vy[i] = distribucion(gen);
-        sistema.vz[i] = distribucion(gen);
+        sistema.vx[i] = dist(gen);
+        sistema.vy[i] = dist(gen);
+        sistema.vz[i] = dist(gen);
     }
 
     // Corregir momento lineal para evitar deriva del centro de masa
-    corregir_momento_lineal();
-
-    // Reescalar velocidades para compensar la pérdida de temperatura por corrección del momento
-    // La corrección del momento reduce la temperatura, así que la reescalamos
-    double temp_actual = 0.0;
-    for (int i = 0; i < N; ++i) {
-        temp_actual += sistema.vx[i]*sistema.vx[i] +
-                       sistema.vy[i]*sistema.vy[i] + 
-                       sistema.vz[i]*sistema.vz[i];
+    if (corregir_cm) {
+        corregir_momento_lineal();
     }
-    temp_actual *= 0.5 / N; // (1/2)<v^2> = (3/2)T
+
+    // Reescalar velocidades a T* objetivo
+    double sum_v2 = 0.0;
+    for (int i = 0; i < N; ++i) {
+        sum_v2 += sistema.vx[i]*sistema.vx[i] +
+                  sistema.vy[i]*sistema.vy[i] + 
+                  sistema.vz[i]*sistema.vz[i];
+    }
+    const double temp_actual = sum_v2 * 0.5 / N; // (1/2)<v^2> = (3/2)T
 
     if (temp_actual > 0.0) {
         double factor = std::sqrt(temp_referencia / temp_actual);
@@ -131,24 +107,11 @@ void ArgonSimulator::inicializar_sistema() {
             sistema.vy[i] *= factor;
             sistema.vz[i] *= factor;
         }
-        corregir_momento_lineal();
     }
 
-    // Inicializar las cell list
-    std::fill(sistema.cabeza.begin(), sistema.cabeza.end(), -1);
-    std::fill(sistema.lista.begin(), sistema.lista.end(), -1);
+    calcular_fuerzas(); // Inicializar las aceleraciones
 }
-
-/**
- * @brief Corrige el momento lineal total del sistema
- * 
- * Calcula la velocidad del centro de masa y la resta a todas las partículas
- * para asegurar que el momento lineal total sea cero. Esto evita la deriva
- * no física del centro de masa durante la simulación.
- * 
- * @note Asume que todas las partículas tienen la misma masa (masa reducida = 1)
- * @note Se ejecuta automáticamente en inicializar_sistema()
- */
+// Sustrae la velocidad del centro de masas para anular el momento total.
 void ArgonSimulator::corregir_momento_lineal() {
     double vx_cm = 0.0, vy_cm = 0.0, vz_cm = 0.0;
     
@@ -169,24 +132,7 @@ void ArgonSimulator::corregir_momento_lineal() {
         sistema.vz[i] -= vz_cm;
     }
 }
-
-
-/**
- * @brief Calcula fuerzas entre todas las partículas usando cell lists O(n)
- * 
- * Implementa el algoritmo de cell lists 3D optimizado para calcular las fuerzas
- * de Lennard-Jones. Divide el espacio en celdas de tamaño ~rc y solo evalúa
- * interacciones entre partículas en celdas adyacentes. Utiliza la tercera ley
- * de Newton para calcular cada par solo una vez.
- * 
- * @note Complejidad: O(n) en lugar de O(n²) gracias a cell lists
- * @note Fuerza de Lennard-Jones: F = 48 * [(1/r)^14 - 0.5*(1/r)^8] * r_vec
- * @note Energía potencial: U = 4 * [(1/r)^12 - (1/r)^6]
- * @note Calcula también el virial para la presión: W = Σ r_ij · f_ij
- * 
- * @warning Requiere posiciones inicializadas
- * @warning Modifica ax, ay, az, energia_potencial y virial del sistema
- */
+// Calcula fuerzas, energía potencial y virial usando barrido directo o cell lists.
 void ArgonSimulator::calcular_fuerzas() {
 
     const int N = sistema.num_particulas;
@@ -318,27 +264,15 @@ void ArgonSimulator::calcular_fuerzas() {
 
         }}} // fin bucle celdas cx, cy, cz
     }
-
-    
-
-    // Presión instantánea (sin corrección de cola)
-    const double V = L * L * L;
-    sistema.presion_inst = sistema.virial / (3.0 * V);
-    // Nota: el término N*T*/V* se suma en propiedades_termodinamicas()
 }
 
-/**
- * @brief Calcula la corrección de presión de largo alcance
- * 
- * Corrige la presión por el truncamiento del potencial en rc. Esta corrección
- * es necesaria porque el potencial de Lennard-Jones tiene cola de largo alcance.
- * Se calcula una sola vez ya que solo depende de ρ* y rc*.
- * 
- * @note Fórmula: P_cola* = (16 * pi/3) * rho*^2 * [(2/3)*(1/rc*)^9 - (1/rc*)^3]
- * @note Se ejecuta automáticamente en el constructor
- * @note Corrige el efecto de truncar el potencial en r_corte
- */
+// Precalcula la corrección analítica de cola asociada al truncamiento del potencial.
 void ArgonSimulator::calcular_presion_cola() {
+    if (!correccion_presion_cola) {
+        sistema.presion_correccion_cola = 0.0;
+        return;
+    }
+
     const double rho    = sistema.num_particulas
                         / (sistema.longitud_caja * sistema.longitud_caja * sistema.longitud_caja);
     const double rc3    = R_CORTE * R_CORTE * R_CORTE;   // rc^3
@@ -348,33 +282,8 @@ void ArgonSimulator::calcular_presion_cola() {
         (16.0 * M_PI / 3.0) * rho * rho
         * ((2.0 / 3.0) / rc9 - 1.0 / rc3);
 }
-
-/**
- * @brief Aplica condiciones de contorno periódicas
- * 
- * Asegura que todas las partículas permanezcan dentro de la caja
- * aplicando la convención de imagen mínima.
- */
-void ArgonSimulator::aplicar_condiciones_contorno() {
-    const double L = sistema.longitud_caja;
-    
-    for (int i = 0; i < sistema.num_particulas; ++i) {
-        // Mantener posiciones en [0, L).
-        sistema.rx[i] -= L * std::floor(sistema.rx[i] / L);
-        sistema.ry[i] -= L * std::floor(sistema.ry[i] / L);
-        sistema.rz[i] -= L * std::floor(sistema.rz[i] / L);
-    }
-}
-
-/**
- * @brief Integra las ecuaciones de movimiento usando Verlet
- * 
- * Actualiza posiciones y velocidades usando el algoritmo de Verlet:
- * r(t+dt) = 2r(t) - r(t-Δt) + a(t)*dt^2
- * v(t+dt) = [r(t+dt) - r(t-dt)] / (2*dt)
- */
+// Avanza un paso temporal con velocity-Verlet y aplica las correcciones activas.
 void ArgonSimulator::integracion_verlet() {
-    // TODO: cambiar el algoritmo por el de verlet que usa v(dt/2)
     const double half_dt = 0.5 * dt;
     const double L = sistema.longitud_caja;
     
@@ -410,15 +319,11 @@ void ArgonSimulator::integracion_verlet() {
         sistema.vz[i] += sistema.az[i] * half_dt;
     };
 
-    corregir_momento_lineal(); // Para corregir los errores numéricos
+    if (corregir_cm) {
+        corregir_momento_lineal(); // Para corregir los errores numéricos
+    }
 }
-
-/**
- * @brief Calcula propiedades termodinámicas del sistema
- * 
- * Computa temperatura, energía cinética y presión usando las
- * definiciones estadísticas en el ensemble NVT.
- */
+// Actualiza temperatura, energía cinética y presión instantáneas del sistema.
 void ArgonSimulator::propiedades_termodinamicas() {
     const int N = sistema.num_particulas;
     const double V = sistema.longitud_caja * sistema.longitud_caja * sistema.longitud_caja;
@@ -440,15 +345,11 @@ void ArgonSimulator::propiedades_termodinamicas() {
     // El término virial ya se calculó en calcular_fuerzas()
     const double rho = N / V;
     sistema.presion_inst = rho * sistema.temperatura_inst + sistema.virial / (3.0 * V);
-    sistema.presion_inst += sistema.presion_correccion_cola; // Corrección de largo alcance
+    if (correccion_presion_cola) {
+        sistema.presion_inst += sistema.presion_correccion_cola; // Corrección de largo alcance
+    }
 }
-
-/**
- * @brief Escala velocidades para mantener temperatura constante
- * 
- * Implementa un termostato simple que reescala suavemente las velocidades
- * hacia la temperatura objetivo con un factor de amortiguamiento.
- */
+// Reescala todas las velocidades para aproximar la temperatura objetivo.
 void ArgonSimulator::escalar_velocidades() {
     // Si por lo que sea hay un bug sobre la temperatura se salta el escalado
     if (sistema.temperatura_inst > 0.0) {
@@ -463,18 +364,7 @@ void ArgonSimulator::escalar_velocidades() {
         }
     }
 }
-
-/**
- * @brief Ejecuta la simulación completa de dinámica molecular
- * 
- * Realiza una simulación completa con los siguientes pasos:
- * 1. Inicialización del sistema
- * 2. Bucle principal: fuerzas -> integración -> propiedades
- * 3. Guardado de trayectorias cada cierto número de pasos
- * 
- * @param num_pasos Número total de pasos de tiempo a simular
- * @param nombre_archivo Archivo donde guardar las trayectorias
- */
+// Ejecuta el bucle completo de dinámica molecular y muestrea las magnitudes pedidas.
 ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& config,
                                               const std::optional<std::string>& nombre_archivo) {
     // Inicializar sistema
@@ -489,7 +379,14 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         if (!archivo_salida->is_open()) {
             throw std::runtime_error("Error: No se pudo abrir el archivo " + *nombre_archivo);
         }
-        *archivo_salida << "paso,tiempo,temperatura,presion,energia_pot,energia_cin,energia_tot\n";
+
+        // Configuracion del formato
+        auto& out = *archivo_salida;
+        out << "paso,tiempo,temperatura,presion,energia_pot,energia_cin,energia_tot\n"
+            << std::fixed
+            << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+        out.rdbuf() -> pubsetbuf(nullptr, 2>>15); // Reservar 64 kB para el csv
     }
     
     // Bucle principal de simulación
@@ -498,7 +395,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         
         propiedades_termodinamicas(); // Necesario para poder escalar durante el equilibrado
         // Control de temperatura
-        if (paso < config.pasos_equilibrado) {
+        if (reescalar_velocidades && paso < config.pasos_equilibrado) {
             escalar_velocidades();
             propiedades_termodinamicas();  // Actualizar tras el escalado
         }
@@ -518,14 +415,19 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             
             // Escribir al archivo si está abierto
             if (archivo_salida.has_value()) {
-                *archivo_salida << std::fixed << std::setprecision(6)
-                                << paso << ","
-                                << tiempo << ","
-                                << sistema.temperatura_inst << ","
-                                << sistema.presion_inst << ","
-                                << sistema.energia_potencial << ","
-                                << sistema.energia_cinetica << ","
-                                << energia_total << "\n";
+                char linea[256];
+                int len = std::snprintf(linea, sizeof(linea),
+                    "%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
+                    paso, tiempo,
+                    sistema.temperatura_inst,
+                    sistema.presion_inst,
+                    sistema.energia_potencial,
+                    sistema.energia_cinetica,
+                    energia_total);
+
+                if (len > 0) {
+
+                }; // REVIEW: ajustar para que imprima en precisión científica
             }
             
             // Mostrar progreso

@@ -68,8 +68,21 @@ public:
      * @param densidad_reducida Densidad reducida ρ* = ρ σ³
      * @param paso_tiempo Paso de tiempo dt*
      * @param temp_objetivo Temperatura objetivo T*
+     * @param semilla Semilla opcional para reproducibilidad; si vale 0 se usa una aleatoria
+     * @param corregir_cm Activa la corrección del momento lineal total
+     * @param correccion_presion_cola Activa la corrección de cola en la presión
+     * @param reescalar_velocidades Activa el termostato por reescalado durante el equilibrado
      */
-    ArgonSimulator(int particulas_por_lado, double densidad_reducida, double paso_tiempo, double temp_objetivo, unsigned int semilla = 0);
+    ArgonSimulator(
+        int particulas_por_lado,
+        double densidad_reducida,
+        double paso_tiempo,
+        double temp_objetivo,
+        unsigned int semilla = 0,
+        bool corregir_cm = true,
+        bool correccion_presion_cola = true,
+        bool reescalar_velocidades = true
+    );
 
     /**
      * @brief Ejecuta la simulación completa
@@ -96,22 +109,25 @@ private:
     double dt;                     ///< Paso de tiempo reducido
     double temp_referencia;        ///< Temperatura objetivo para termostato
     unsigned int semilla;          ///< Semilla opcional para reproducibilidad
+    bool corregir_cm;              ///< Activa o desactiva la corrección del centro de masa
+    bool correccion_presion_cola;  ///< Activa o desactiva la corrección de cola en presión
+    bool reescalar_velocidades;    ///< Activa o desactiva el reescalado de velocidades en equilibrado
     
     // Constantes físicas de Lennard-Jones
-    static constexpr double R_CORTE = 2.5;         ///< Radio de corte rc* 
-    static constexpr double R_CORTE_SQ = 6.25;     ///< rc*^2 (para optimizar cálculos)
-    static constexpr double COEF_FUERZA = 48.0;   ///< Coeficiente para fuerza LJ
-    static constexpr double COEF_ENERGIA = 4.0;   ///< Coeficiente para energía potencial LJ
+    static constexpr double R_CORTE = 2.5;                  ///< Radio de corte rc* 
+    static constexpr double R_CORTE_SQ = R_CORTE * R_CORTE; ///< rc*^2 (para optimizar cálculos)
+    static constexpr double COEF_FUERZA = 48.0;             ///< Coeficiente para fuerza LJ
+    static constexpr double COEF_ENERGIA = 4.0;             ///< Coeficiente para energía potencial LJ
     
     // Métodos privados para las diferentes etapas de la simulación
     /**
      * @brief Inicializa posiciones y velocidades del sistema
      * 
      * Coloca las partículas en una red cúbica simple y asigna velocidades
-     * aleatorias con distribución Maxwell-Boltzmann. Corrige el momento
-     * lineal total para evitar deriva del centro de masa.
+     * aleatorias. Puede corregir el momento lineal total y reescalar las
+     * velocidades iniciales para arrancar cerca de la temperatura objetivo.
      * 
-     * @note Se ejecuta automáticamente al iniciador la simulación
+     * @note Se ejecuta automáticamente al iniciar la simulación
      * @warning Requiere que el constructor haya sido llamado primero
      */
     void inicializar_sistema();
@@ -121,7 +137,8 @@ private:
      * 
      * Calcula la velocidad del centro de masa y la resta a todas las
      * partículas para asegurar que el momento lineal total sea cero.
-     * Evita la deriva no física del centro de masa durante la simulación.
+     * Evita la deriva no física del centro de masa cuando esta corrección
+     * está habilitada.
      * 
      * @note Asume que todas las partículas tienen la misma masa (m = 1)
      * @note Se ejecuta automáticamente en inicializar_sistema()
@@ -131,8 +148,9 @@ private:
     /**
      * @brief Calcula fuerzas entre todas las partículas usando cell lists
      * 
-     * Implementa el algoritmo de cell lists 3D optimizado para calcular
-     * fuerzas de Lennard-Jones con complejidad O(n) en lugar de O(n²).
+     * Implementa el cálculo de fuerzas de Lennard-Jones. Usa cell lists
+     * cuando la discretización espacial es segura y recurre a un barrido
+     * exhaustivo de pares cuando el número de celdas por lado es pequeño.
      * Actualiza las aceleraciones, energía potencial y virial del sistema.
      * 
      * @note Fuerza LJ: F = 48 * [(1/r)^14 - 0.5*(1/r)^8] * r_vec
@@ -143,17 +161,6 @@ private:
      */
     void calcular_fuerzas();
     
-    /**
-     * @brief Aplica condiciones de contorno periódicas
-     * 
-     * Asegura que todas las partículas permanezcan dentro de la caja
-     * mediante la convención de imagen mínima. Reposiciona partículas
-     * que cruzan los límites al lado opuesto de la caja.
-     * 
-     * @note Mantiene el volumen constante (ensemble NVT)
-     * @note Se ejecuta después de cada paso de integración
-     */
-    void aplicar_condiciones_contorno();
     
     /**
      * @brief Integra las ecuaciones de movimiento usando el algoritmo de Verlet
@@ -172,7 +179,8 @@ private:
      * 
      * Computa temperatura, energía cinética y presión utilizando las
      * definiciones estadísticas en el ensemble NVT. Realiza promedios
-     * sobre todas las partículas e incluye correcciones de largo alcance.
+     * sobre todas las partículas e incluye la corrección de cola solo si
+     * está activada.
      * 
      * @note K = (1/2) Σ m*v² = (1/2) Σ v² (para m = 1)
      * @note T = (2/3) K / N
@@ -186,7 +194,8 @@ private:
      * 
      * Implementa un termostato simple que reescala suavemente las
      * velocidades de todas las partículas hacia la temperatura objetivo.
-     * Utilizado durante la fase de equilibración para estabilizar el sistema.
+     * Utilizado durante la fase de equilibración cuando el reescalado está
+     * habilitado para estabilizar el sistema.
      * 
      * @note factor = √(T_ref / T_actual)
      * @note Se aplica solo durante los primeros pasos (fase de equilibrado)
@@ -198,8 +207,8 @@ private:
      * @brief Calcula la corrección de presión por truncamiento del potencial
      * 
      * Corrige el efecto de truncar el potencial de Lennard-Jones en el
-     * radio de corte. Esta corrección es necesaria debido a la cola de
-     * largo alcance del potencial y se suma a la presión calculada.
+     * radio de corte. Si la funcionalidad está desactivada, deja la
+     * corrección almacenada a cero como salvaguarda.
      * 
      * @note Fórmula: P_cola = (16π/3) * ρ² * [(2/3)/rc⁹ - 1/rc³]
      * @note Se ejecuta una sola vez en el constructor
