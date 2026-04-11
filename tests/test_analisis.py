@@ -21,7 +21,7 @@ def _simulacion_estandar():
     return sim.ejecutar(
         num_pasos=500,
         pasos_equilibrado=100,
-        frecuencia_muestreo=10,
+        frecuencia_muestreo=2,
         csv=None,
     )
 

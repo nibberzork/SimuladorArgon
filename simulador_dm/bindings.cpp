@@ -11,7 +11,9 @@ PYBIND11_MODULE(simulador, m) {
         .def(py::init<>())
         .def_readwrite("num_pasos", &ConfiguracionSimulacion::num_pasos)
         .def_readwrite("pasos_equilibrado", &ConfiguracionSimulacion::pasos_equilibrado)
-        .def_readwrite("frecuencia_muestreo", &ConfiguracionSimulacion::frecuencia_muestreo);
+        .def_readwrite("frecuencia_muestreo", &ConfiguracionSimulacion::frecuencia_muestreo)
+        .def_readwrite("frecuencia_velocidades", &ConfiguracionSimulacion::frecuencia_velocidades)
+        .def_readwrite("muestrear_velocidades", &ConfiguracionSimulacion::muestrear_velocidades);
 
     py::class_<ResultadosSimulacion>(m, "ResultadosSimulacion")
         .def(py::init<>())
@@ -21,7 +23,9 @@ PYBIND11_MODULE(simulador, m) {
         .def_readwrite("presiones", &ResultadosSimulacion::presiones)
         .def_readwrite("energias_potenciales", &ResultadosSimulacion::energias_potenciales)
         .def_readwrite("energias_cineticas", &ResultadosSimulacion::energias_cineticas)
-        .def_readwrite("energias_totales", &ResultadosSimulacion::energias_totales);
+        .def_readwrite("energias_totales", &ResultadosSimulacion::energias_totales)
+        .def_readonly("modulos_velocidades", &ResultadosSimulacion::modulos_velocidades);
+
 
     py::class_<ArgonSimulator>(m, "ArgonSimulator")
         .def(py::init<int, double, double, double, unsigned int, bool, bool, bool>(),

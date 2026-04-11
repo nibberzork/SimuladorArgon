@@ -1,5 +1,6 @@
 # _wrapper_simulator.py
 import pandas as pd
+import numpy as np
 from .simulador import ArgonSimulator, ConfiguracionSimulacion
 
 # Nota: ArgonSimulator y ConfiguracionSimulacion se importan del módulo privado _simulador
@@ -72,8 +73,11 @@ class Simulador:
                  num_pasos: int = 25000,
                  pasos_equilibrado: int = 1000,
                  frecuencia_muestreo: int = 50,
+                 frecuencia_muestreo_velocidades: int = 100,
+                 muestrear_velocidades: bool = False,
                  csv: str = None,
-                 desde_csv: bool = True) -> pd.DataFrame:
+                 npy_velocities: str = None,
+                 desde_csv: bool = True) -> tuple[pd.DataFrame, np.ndarray]:
         """
         Ejecuta la simulacion y devuelve los resultados muestreados.
 
@@ -84,14 +88,21 @@ class Simulador:
         Parameters
         ----------
         num_pasos : int, optional
-            Numero total de pasos de integracion. Por defecto 25000.
+            Número total de pasos de integración. Por defecto 25000.
         pasos_equilibrado : int, optional
             Pasos iniciales con termostato activo. Debe ser menor que
             num_pasos. Por defecto 1000.
         frecuencia_muestreo : int, optional
-            Intervalo de pasos entre muestras guardadas. Por defecto 50.
+            Intervalo de pasos entre muestras guardadas (termodinámicas). Por defecto 50.
+        frecuencia_muestreo_velocidades : int, optional
+            Intervalo de pasos entre muestras de módulos de velocidad. Por defecto 100.
+        muestrear_velocidades : bool, optional
+            Si activar muestreo de módulos de velocidad. Por defecto False.
         csv : str, optional
-            Ruta del archivo CSV de salida. None para no guardar en disco.
+            Ruta del archivo CSV de salida para termodinámicas. None para no guardar en disco.
+            Por defecto None.
+        npy_velocities : str, optional
+            Ruta del archivo .npy para guardar módulos de velocidad con np.save. None para no guardar.
             Por defecto None.
         desde_csv : bool, optional
             Si True y csv apunta a un archivo existente, carga los datos
@@ -126,10 +137,13 @@ class Simulador:
         config.num_pasos = num_pasos
         config.pasos_equilibrado = pasos_equilibrado
         config.frecuencia_muestreo = frecuencia_muestreo
+        config.frecuencia_velocidades = frecuencia_muestreo_velocidades
+        config.muestrear_velocidades = muestrear_velocidades
 
         resultados = self._sim.ejecutar(config, csv)
 
-        return pd.DataFrame({
+        # Crear DataFrame con termodinámicas
+        df = pd.DataFrame({
             'paso':               resultados.pasos,
             'tiempo':             resultados.tiempos,
             'temperatura':        resultados.temperaturas,
@@ -138,3 +152,13 @@ class Simulador:
             'energia_cinetica':   resultados.energias_cineticas,
             'energia_total':      resultados.energias_totales,
         })
+        
+        # Exponer módulos de velocidad como array NumPy
+        velocidades_array = np.array(resultados.modulos_velocidades, dtype=np.float64)
+        
+        # Guardar velocidades con np.save si se especifica
+        if npy_velocities is not None:
+            np.save(npy_velocities, velocidades_array)
+            print(f"Módulos de velocidad guardados en {npy_velocities}.npy")
+        
+        return df, velocidades_array

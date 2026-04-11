@@ -38,9 +38,11 @@ struct SistemaParticulas {
 };
 
 struct ConfiguracionSimulacion {
-    int num_pasos = 25000; ///< Número total de pasos de tiempo
-    int pasos_equilibrado = 1000; ///< Número de pasos de tiempo para equilibrar
-    int frecuencia_muestreo = 50; ///< Frecuencia de muestreo de variables
+    int num_pasos; ///< Número total de pasos de tiempo
+    int pasos_equilibrado; ///< Número de pasos de tiempo para equilibrar
+    int frecuencia_muestreo; ///< Frecuencia de muestreo de variables
+    int frecuencia_velocidades; ///< Freucencia de muestreo para stakear el modulo de las velocidades (para histogramas)
+    bool muestrear_velocidades; ///< Si activar muestreo de módulos de velocidad
 };
 
 struct ResultadosSimulacion {
@@ -51,6 +53,9 @@ struct ResultadosSimulacion {
     std::vector <double>    energias_potenciales;
     std::vector <double>    energias_cineticas;
     std::vector <double>    energias_totales;
+
+    // Para histogramas de velocidades
+    std::vector<double> modulos_velocidades; // Vector de módulos aplanado para todas las partículas en los pasos
 };
 
 /**

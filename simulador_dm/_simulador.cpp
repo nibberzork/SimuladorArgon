@@ -328,7 +328,7 @@ void ArgonSimulator::propiedades_termodinamicas() {
     const int N = sistema.num_particulas;
     const double V = sistema.longitud_caja * sistema.longitud_caja * sistema.longitud_caja;
     
-    // Energía cinética: K = (1/2) Σ m v² = (3/2) N T (para m=1)
+    // Energía cinética: K = (1/2)  m^i v_i^2 = (3/2) N T (para m=1)
     double kin_energy = 0.0;
     for (int i = 0; i < N; ++i) {
         kin_energy += sistema.vx[i]*sistema.vx[i] + 
@@ -341,7 +341,7 @@ void ArgonSimulator::propiedades_termodinamicas() {
     // Temperatura: T = (2/3) K / N
     sistema.temperatura_inst = (2.0 / 3.0) * kin_energy / N;
     
-    // Presión: P = ρ T + (1/(3V)) Σ r_ij · f_ij
+    // Presión: P = ρ T + (1/(3V)) r_ij · f^ij
     // El término virial ya se calculó en calcular_fuerzas()
     const double rho = N / V;
     sistema.presion_inst = rho * sistema.temperatura_inst + sistema.virial / (3.0 * V);
@@ -389,6 +389,23 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         out.rdbuf() -> pubsetbuf(nullptr, 2>>15); // Reservar 64 kB para el csv
     }
     
+    // Prealocar vectores para termodinámicas
+    int num_muestras_termo = (config.num_pasos + config.frecuencia_muestreo - 1) / config.frecuencia_muestreo;
+    resultados.pasos.reserve(num_muestras_termo);
+    resultados.tiempos.reserve(num_muestras_termo);
+    resultados.temperaturas.reserve(num_muestras_termo);
+    resultados.presiones.reserve(num_muestras_termo);
+    resultados.energias_potenciales.reserve(num_muestras_termo);
+    resultados.energias_cineticas.reserve(num_muestras_termo);
+    resultados.energias_totales.reserve(num_muestras_termo);
+    
+    // Prealocar vector para módulos de velocidad
+    if (config.muestrear_velocidades) {
+        int num_muestras_velocidades = (config.num_pasos + config.frecuencia_velocidades - 1) / config.frecuencia_velocidades;
+        size_t tam_estimado_vel = static_cast<size_t>(num_muestras_velocidades) * sistema.num_particulas;
+        resultados.modulos_velocidades.reserve(tam_estimado_vel);
+    }
+    
     // Bucle principal de simulación
     for (int paso = 0; paso < config.num_pasos; ++paso) {
         integracion_verlet();  // Avanzar dt
@@ -434,6 +451,18 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             std::cout << "Paso " << paso << "/" << config.num_pasos 
                       << " - T=" << sistema.temperatura_inst 
                       << " - P=" << sistema.presion_inst << std::endl;
+        }
+        
+        // Muestreo de módulos de velocidad (solo si activado)
+        if (config.muestrear_velocidades && paso % config.frecuencia_velocidades == 0) {
+            for (int i = 0; i < sistema.num_particulas; ++i) {
+                double modulo = std::sqrt(
+                    sistema.vx[i] * sistema.vx[i] +
+                    sistema.vy[i] * sistema.vy[i] +
+                    sistema.vz[i] * sistema.vz[i]
+                );
+                resultados.modulos_velocidades.push_back(modulo);
+            }
         }
     }
     
