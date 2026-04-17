@@ -26,17 +26,46 @@ PYBIND11_MODULE(simulador, m) {
         .def_readwrite("energias_totales", &ResultadosSimulacion::energias_totales)
         .def_readonly("modulos_velocidades", &ResultadosSimulacion::modulos_velocidades);
 
-
+    py::register_exception<ErrorInestabilidadNumerica>(
+        m,
+        "ErrorInestabilidadNumerica"
+    );
+    
     py::class_<ArgonSimulator>(m, "ArgonSimulator")
-        .def(py::init<int, double, double, double, unsigned int, bool, bool, bool>(),
-             py::arg("particulas_por_lado") = 8,
-             py::arg("densidad_reducida") = 0.84,
-             py::arg("paso_tiempo") = 0.005,
-             py::arg("temp_objetivo") = 1.002,
-             py::arg("seed") = 0,
+        .def(py::init<
+             int,
+             double,
+             double,
+             double,
+             unsigned int,
+             bool,
+             bool,
+             bool>(),
+             py::arg("particulas_por_lado"),
+             py::arg("densidad_reducida"),
+             py::arg("paso_tiempo"),
+             py::arg("temp_objetivo"),
+             py::arg("semilla") = 0,
              py::arg("corregir_cm") = true,
              py::arg("correccion_presion_cola") = true,
              py::arg("reescalar_velocidades") = true)
-        .def("ejecutar", &ArgonSimulator::ejecutar);
+        .def("ejecutar", 
+            [](ArgonSimulator& self,
+               const ConfiguracionSimulacion& cfg,
+               const std::optional<std::string>& archivo) {
+                try {
+                    return self.ejecutar(cfg, archivo);
+                } catch (ErrorInestabilidadNumerica& e) {
+                    py::object exc = py::module_::import("simulador_dm.simulador")
+                        .attr("ErrorInestabilidadNumerica");
+                    py::object exc_inst = exc(e.what());
+                    exc_inst.attr("resultados_parciales") = e.resultados_parciales;
+                    PyErr_SetObject(exc.ptr(), exc_inst.ptr());
+                    throw py::error_already_set();
+                }
+            },
+            py::arg("config"),
+            py::arg("nombre_archivo") = py::none()
+        );
 }
 

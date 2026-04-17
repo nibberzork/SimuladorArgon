@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pandas as pd
+from pathlib import Path
 from typing import Sequence, Optional
 import matplotlib.pyplot as plt
+import numpy as np
 
 _UNIDADES = {
     "temperatura":       "T*",
@@ -219,4 +221,86 @@ def graficar_resumen_termodinamico(
     fig.tight_layout()
 
     return fig, axes
+
+
+def graficar_histograma_velocidades(
+    velocidades,
+    *,
+    temperatura: float = 1.002,
+    bins: int = 60,
+    figsize=(12, 5),
+    filepath: str | Path | None = None,
+) -> plt.Figure:
+    """
+    Dibuja un histograma normalizado de los módulos de velocidad y la distribución teórica de Maxwell-Boltzmann.
+
+    Parameters
+    ----------
+    velocidades : array-like
+        Vector de módulos de velocidad.
+    temperatura : float, optional
+        Temperatura reducida para la distribución teórica. Por defecto 1.002.
+    bins : int, optional
+        Número de barras del histograma.
+    figsize : tuple, optional
+        Tamaño de la figura.
+    filepath : str | Path | None, optional
+        Si se especifica, guarda la figura en esa ruta.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Figura con el histograma y la distribución teórica.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
+    
+    # Histograma normalizado (densidad de probabilidad)
+    ax1.hist(velocidades, bins=bins, density=True, alpha=0.7, color='blue', edgecolor='black')
+    ax1.set_xlabel('Módulo de velocidad (unidades reducidas)')
+    ax1.set_ylabel('Densidad de probabilidad')
+    ax1.set_title('Histograma de velocidades (normalizado)')
+    ax1.grid(True, alpha=0.3)
+    
+    # Obtener límites del eje x del histograma
+    x_min, x_max = ax1.get_xlim()
+    
+    # Distribución teórica de Maxwell-Boltzmann
+    v = np.linspace(0, x_max, 1000)  # Empezar desde 0 hasta el máximo del histograma
+    
+    # Función de densidad de probabilidad de Maxwell-Boltzmann
+    # En unidades reducidas: m=1, k_B=1
+    factor = 4 * np.pi * v**2 / (2 * np.pi * temperatura)**(3/2)
+    pdf = factor * np.exp(-v**2 / (2 * temperatura))
+    
+    ax2.plot(v, pdf, 'r-', linewidth=2, label=f'T = {temperatura:.3f}')
+    ax2.set_xlabel('Módulo de velocidad (unidades reducidas)')
+    # ax2.set_ylabel('Densidad de probabilidad')
+    ax2.set_title('Distribución de Maxwell-Boltzmann teórica')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Asegurar que ambos ejes x tengan los mismos límites
+    ax2.set_xlim(x_min, x_max)
+    
+    fig.suptitle('Distribución de velocidades', fontsize=14)
+    fig.tight_layout()
+    
+    if filepath is not None:
+        fig.savefig(filepath, dpi=300, bbox_inches='tight')
+    
+    return fig
+    # if velocidades is None:
+    #     raise ValueError("Las velocidades son necesarias para generar el histograma.")
+
+    # fig, ax = plt.subplots(figsize=figsize)
+    # ax.hist(velocidades, bins=bins, color="steelblue", edgecolor="black", alpha=0.75)
+    # ax.set_title("Histograma de módulos de velocidad")
+    # ax.set_xlabel("Módulo de velocidad")
+    # ax.set_ylabel("Frecuencia")
+    # ax.grid(True, alpha=0.25)
+
+    # if filepath is not None:
+    #     fig.savefig(str(filepath), bbox_inches="tight")
+
+    # return fig
 

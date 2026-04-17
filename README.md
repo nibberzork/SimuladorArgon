@@ -1,6 +1,6 @@
 # Simulador de dinámica molecular para Argón
 
-Este proyecto implementa un simulador de dinámica molecular para un sistema de átomos de argón en unidades reducidas de Lennard-Jones. La parte numérica está escrita en C++ y se expone a Python mediante `pybind11`, con una interfaz de alto nivel que devuelve los resultados como un `DataFrame` de `pandas`.
+Este proyecto implementa un simulador de dinámica molecular para un sistema de átomos de argón en unidades reducidas de Lennard-Jones. La parte numérica está escrita en C++ y se expone a Python mediante `pybind11`, con una interfaz de alto nivel que devuelve los resultados termodinámicos como un `DataFrame` de `pandas` y, opcionalmente, un array de NumPy con módulos de velocidad.
 
 ## Características
 
@@ -10,7 +10,7 @@ Este proyecto implementa un simulador de dinámica molecular para un sistema de 
 - Optimización del cálculo de fuerzas con `cell lists`.
 - Condiciones de contorno periódicas.
 - Muestreo de temperatura, presión y energías.
-- Exportación opcional de resultados a CSV.
+- Exportación opcional de resultados a CSV y de módulos de velocidad a NPY.
 
 ## Estructura del proyecto
 
@@ -67,14 +67,18 @@ sim = Simulador(
     temp_objetivo=1.002,
 )
 
-df = sim.ejecutar(
+df, velocidades = sim.ejecutar(
     num_pasos=25000,
     pasos_equilibrado=1000,
     frecuencia_muestreo=50,
+    frecuencia_muestreo_velocidades=100,
+    muestrear_velocidades=True,
     csv="resultados.csv",
+    npy_velocidades="velocidades.npy",
 )
 
 print(df.head())
+print(velocidades.shape)
 ```
 
 ## API principal
@@ -89,21 +93,29 @@ Parámetros:
 - `densidad_reducida`: densidad reducida del sistema.
 - `paso_tiempo`: paso temporal de integración.
 - `temp_objetivo`: temperatura objetivo usada durante el equilibrado.
+- `seed`: semilla del generador aleatorio. Si vale `0`, se usa entropía del sistema.
+- `corregir_cm`: activa la corrección de deriva del centro de masas.
+- `correccion_presion_cola`: activa la corrección de cola en la presión.
+- `reescalar_velocidades`: activa el termostato por reescalado durante el equilibrado.
 
 ### `Simulador.ejecutar(...)`
 
-Ejecuta la simulación y devuelve un `pandas.DataFrame`.
+Ejecuta la simulación y devuelve una tupla `(df, velocidades)`.
 
 Parámetros:
 
 - `num_pasos`: número total de pasos de simulación.
 - `pasos_equilibrado`: pasos iniciales en los que se reescalan velocidades para estabilizar la temperatura.
 - `frecuencia_muestreo`: cada cuántos pasos se guardan observables.
+- `frecuencia_muestreo_velocidades`: cada cuántos pasos se muestrean módulos de velocidad.
+- `muestrear_velocidades`: activa el muestreo de módulos de velocidad para análisis posteriores.
 - `csv`: ruta opcional para guardar los resultados en disco.
+- `npy_velocidades`: ruta opcional para guardar los módulos de velocidad con `np.save`.
+- `forzar_calculo`: si `False` y el CSV ya existe, reutiliza el archivo existente en lugar de recalcular.
 
 ## Salida
 
-El `DataFrame` devuelto contiene las columnas:
+El primer elemento de retorno, `df`, es un `DataFrame` con las columnas:
 
 - `paso`
 - `tiempo`
@@ -113,7 +125,23 @@ El `DataFrame` devuelto contiene las columnas:
 - `energia_cinetica`
 - `energia_total`
 
-Si se proporciona el parámetro `csv`, se genera además un archivo con estas mismas magnitudes.
+El segundo elemento, `velocidades`, es un `numpy.ndarray` con los módulos de velocidad muestreados. Si `muestrear_velocidades=False`, se devuelve un array vacío.
+
+Si se proporciona el parámetro `csv`, se genera además un archivo con estas mismas magnitudes. Si se proporciona `npy_velocidades` y hubo muestreo de velocidades, se guarda también el array correspondiente en formato `.npy`.
+
+Si `csv` ya existe y `forzar_calculo=False`, el wrapper carga ese archivo y devuelve sus datos sin lanzar una nueva simulación. Si además existe el archivo indicado por `npy_velocidades`, también se carga.
+
+En configuraciones numéricamente inestables, el wrapper intenta devolver los datos parciales ya muestreados y emite un `RuntimeWarning`.
+
+## Funciones públicas de análisis
+
+Además de `Simulador`, el paquete exporta estas utilidades:
+
+- `graficar_energia(df, cutoff=None, *, ax=None, figsize=(9, 4.5))`: representa la energía total frente a tiempo o paso.
+- `graficar_resumen_termodinamico(df, cutoff=None, *, axes=None, figsize=(11, 8))`: genera una rejilla 2x2 con temperatura, presión, energía cinética y energía potencial.
+- `graficar_histograma_velocidades(velocidades, *, temperatura=1.002, bins=60, figsize=(12, 5), filepath=None)`: dibuja el histograma normalizado de velocidades y la distribución teórica de Maxwell-Boltzmann.
+
+Las funciones de análisis esperan un `DataFrame` con las columnas termodinámicas necesarias y usan `tiempo` como eje X cuando está disponible; si no, usan `paso`.
 
 ## Detalles físicos y numéricos
 

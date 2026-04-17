@@ -1,14 +1,12 @@
-from setuptools import setup, Extension
-import pybind11
+from setuptools import setup
+from pybind11.setup_helpers import Pybind11Extension, build_ext
 
-# Extensión para el módulo simulador compilado con pybind11
 ext_modules = [
-    Extension(
+    Pybind11Extension(
         'simulador_dm.simulador',
         ['simulador_dm/bindings.cpp', 'simulador_dm/_simulador.cpp'],
-        include_dirs=[pybind11.get_include(), 'simulador_dm'],
-        language='c++',
-        extra_compile_args=['/std:c++17', '/O2'],
+        include_dirs=['simulador_dm'],
+        extra_compile_args=['/std:c++17', '/O3'],
     ),
 ]
 
@@ -20,6 +18,7 @@ setup(
     url='https://example.com',
     packages=['simulador_dm'],
     ext_modules=ext_modules,
+    cmdclass={"build_ext": build_ext},
     install_requires=[
         'pybind11>=2.6.0',
         'pandas>=1.0',

@@ -27,19 +27,19 @@ def _simulacion_estandar():
 
 
 def test_graficas_analisis_con_parametros_estandar():
-    df = _simulacion_estandar()
+    df, _ = _simulacion_estandar()
 
     ax_energia = graficar_energia(df, cutoff=100)
     fig_resumen, axes_resumen = graficar_resumen_termodinamico(df, cutoff=100)
 
-    assert ax_energia.get_title() == "Energia total"
-    assert len(ax_energia.lines) == 2
+    assert ax_energia.get_title() == "Energía total"
+    assert len(ax_energia.lines) == 5
 
     assert fig_resumen is not None
     assert axes_resumen.shape == (2, 2)
 
     for ax in axes_resumen.flat:
-        assert len(ax.lines) == 2
+        assert len(ax.lines) == 5
 
     matplotlib.pyplot.close(ax_energia.figure)
     matplotlib.pyplot.close(fig_resumen)

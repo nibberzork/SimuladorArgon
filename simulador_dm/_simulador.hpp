@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <optional>
+#include <stdexcept>
 
 /**
  * @brief Estructura que contiene todas las variables del sistema de partículas
@@ -56,6 +57,32 @@ struct ResultadosSimulacion {
 
     // Para histogramas de velocidades
     std::vector<double> modulos_velocidades; // Vector de módulos aplanado para todas las partículas en los pasos
+};
+
+/**
+ * @brief Excepción lanzada cuando se detecta inestabilidad numérica durante la simulación
+ *        de dinámica molecular (típicamente por un paso de tiempo dt* excesivo).
+ */
+class ErrorInestabilidadNumerica : public std::runtime_error {
+public:
+        ResultadosSimulacion resultados_parciales; ///< Resultados muestreados hasta el momento de la excepción
+
+    /**
+     * @brief Constructor de la excepción
+     * @param paso Paso de tiempo actual en el que se detectó la inestabilidad
+     * @param dt Paso de tiempo reducido utilizado en la simulación
+     * @param detalles Detalles adicionales sobre la inestabilidad detectada
+     * @param resultados Resultados muestreados hasta el momento de la excepción (para análisis posterior)
+     */
+    explicit ErrorInestabilidadNumerica(
+        int paso,
+        double dt,
+        const std::string& detalles,
+        ResultadosSimulacion&& resultados)
+        : std::runtime_error("Inestabilidad numérica detectada en paso " + std::to_string(paso) +
+                             " (dt* = " + std::to_string(dt) + ").\n" + detalles),
+          resultados_parciales(std::move(resultados))
+    {}
 };
 
 /**
@@ -177,7 +204,7 @@ private:
      * @note Se ejecuta dos veces por ciclo de simulación
      * @warning Debe alternar con cálculo de fuerzas para convergencia correcta
      */
-    void integracion_verlet();
+    void integracion_verlet(int paso, ResultadosSimulacion& resultados);
     
     /**
      * @brief Calcula propiedades termodinámicas del sistema
@@ -193,6 +220,16 @@ private:
      * @note Se ejecuta al final de cada paso de integración
      */
     void propiedades_termodinamicas();
+
+    /**
+     * @brief Verifica la estabilidad numérica del sistema
+     * 
+     * Comprueba que no haya valores NaN o infinitos en posiciones,
+     * velocidades y aceleraciones. Retorna true si todo está bien.
+     * 
+     * @return true si el sistema es numéricamente estable, false en caso contrario
+     */
+    bool verificar_estabilidad() const;
     
     /**
      * @brief Escala velocidades para mantener temperatura constante

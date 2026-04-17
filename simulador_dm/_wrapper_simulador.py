@@ -1,12 +1,19 @@
 # _wrapper_simulator.py
 import pandas as pd
 import numpy as np
-from .simulador import ArgonSimulator, ConfiguracionSimulacion
+import warnings
+from . import simulador as _simulador_mod
+
+ArgonSimulator = _simulador_mod.ArgonSimulator
+ConfiguracionSimulacion = _simulador_mod.ConfiguracionSimulacion
+# Compatibilidad con binarios antiguos que aún no exponen la excepción específica.
+ErrorInestabilidadNumerica = getattr(_simulador_mod, "ErrorInestabilidadNumerica", RuntimeError)
+
 
 # Nota: ArgonSimulator y ConfiguracionSimulacion se importan del módulo privado _simulador
 # compilado como simulador.cp312-win_amd64.pyd
 
-class Simulador:
+class WraperSimulador:
     """
     Simulador de dinamica molecular para Argon en unidades reducidas de Lennard-Jones.
 
@@ -76,8 +83,8 @@ class Simulador:
                  frecuencia_muestreo_velocidades: int = 100,
                  muestrear_velocidades: bool = False,
                  csv: str = None,
-                 npy_velocities: str = None,
-                 desde_csv: bool = True) -> tuple[pd.DataFrame, np.ndarray]:
+                 npy_velocidades: str = None,
+                 forzar_calculo: bool = False) -> tuple[pd.DataFrame, np.ndarray]:
         """
         Ejecuta la simulacion y devuelve los resultados muestreados.
 
@@ -101,18 +108,18 @@ class Simulador:
         csv : str, optional
             Ruta del archivo CSV de salida para termodinámicas. None para no guardar en disco.
             Por defecto None.
-        npy_velocities : str, optional
+        npy_velocidades : str, optional
             Ruta del archivo .npy para guardar módulos de velocidad con np.save. None para no guardar.
             Por defecto None.
-        desde_csv : bool, optional
-            Si True y csv apunta a un archivo existente, carga los datos
-            sin simular. Por defecto True.
+        forzar_calculo : bool, optional
+            Si True, fuerza la simulación incluso si el archivo CSV existe.
+            Por defecto False.
 
         Returns
         -------
-        pd.DataFrame
-            DataFrame con una fila por muestra (cada frecuencia_muestreo
-            pasos) y las columnas:
+        tuple[pd.DataFrame, np.ndarray]
+            Tupla con el DataFrame de termodinámicas y un array NumPy con
+            los módulos de velocidad. El array estará vacío si no se muestrearon.
 
             - paso              : int,   numero de paso de integracion
             - tiempo            : float, tiempo reducido t*
@@ -127,11 +134,18 @@ class Simulador:
         RuntimeError
             Si csv no es None y no se puede escribir el archivo indicado.
         """
-        if desde_csv and csv is not None:
+        if not forzar_calculo and csv is not None:
             from os.path import exists
             if exists(csv):
-                return pd.read_csv(csv)
-        
+                df = pd.read_csv(csv)
+                velocidades_array = np.empty((0,), dtype=np.float64)
+                if npy_velocidades is not None:
+                    ruta_vel = npy_velocidades
+                    if not ruta_vel.lower().endswith('.npy'):
+                        ruta_vel += '.npy'
+                    if exists(ruta_vel):
+                        velocidades_array = np.load(ruta_vel)
+                return df, velocidades_array
 
         config = ConfiguracionSimulacion()
         config.num_pasos = num_pasos
@@ -140,8 +154,18 @@ class Simulador:
         config.frecuencia_velocidades = frecuencia_muestreo_velocidades
         config.muestrear_velocidades = muestrear_velocidades
 
-        resultados = self._sim.ejecutar(config, csv)
-
+        # TODO: Capturar el error y extraer los datos parciales relanzando un warning para que no corte la ejecución
+        try:
+            resultados = self._sim.ejecutar(config, csv)
+        except ErrorInestabilidadNumerica as e:
+            warnings.warn(
+                f"Simulación terminada prematuramente: {e}. "
+                "Se devuelven los datos parciales hasta el momento de la explosión numérica.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            resultados = e.resultados_parciales
+        
         # Crear DataFrame con termodinámicas
         df = pd.DataFrame({
             'paso':               resultados.pasos,
@@ -154,11 +178,22 @@ class Simulador:
         })
         
         # Exponer módulos de velocidad como array NumPy
-        velocidades_array = np.array(resultados.modulos_velocidades, dtype=np.float64)
+        if muestrear_velocidades:
+            velocidades_array = np.array(resultados.modulos_velocidades, dtype=np.float64)
+        else:
+            velocidades_array = np.empty((0,), dtype=np.float64)
         
-        # Guardar velocidades con np.save si se especifica
-        if npy_velocities is not None:
-            np.save(npy_velocities, velocidades_array)
-            print(f"Módulos de velocidad guardados en {npy_velocities}.npy")
+        # Guardar DataFrame en CSV si se especifica
+        if csv is not None:
+            df.to_csv(csv, index=False)
+            print(f"Datos termodinámicos guardados en {csv}")
+
+        # Guardar velocidades con np.save si se especifica y se muestrearon
+        if npy_velocidades is not None and velocidades_array.size > 0:
+            ruta_vel = npy_velocidades
+            if not ruta_vel.lower().endswith('.npy'):
+                ruta_vel += '.npy'
+            np.save(ruta_vel, velocidades_array)
+            print(f"Módulos de velocidad guardados en {ruta_vel}")
         
         return df, velocidades_array

@@ -1,6 +1,7 @@
 #include "_simulador.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <random>
 #include <iostream>
 #include <fstream>
@@ -59,7 +60,7 @@ void ArgonSimulator::inicializar_sistema() {
     const double L = sistema.longitud_caja; // Longitud de la caja
     
     // Inicializar posiciones en una red cúbica
-    const int n = std::cbrt(sistema.num_particulas); // Número de partículas por lado
+    const int n = static_cast<int>(std::round(std::cbrt(sistema.num_particulas))); // Número de partículas por lado
     const double paso = L / n; // Paso entre partículas
     
     int index = 0;
@@ -98,7 +99,7 @@ void ArgonSimulator::inicializar_sistema() {
                   sistema.vy[i]*sistema.vy[i] + 
                   sistema.vz[i]*sistema.vz[i];
     }
-    const double temp_actual = sum_v2 * 0.5 / N; // (1/2)<v^2> = (3/2)T
+    const double temp_actual = sum_v2  / (3.0 * N); // (1/2)<v^2> = (3/2)T
 
     if (temp_actual > 0.0) {
         double factor = std::sqrt(temp_referencia / temp_actual);
@@ -283,7 +284,7 @@ void ArgonSimulator::calcular_presion_cola() {
         * ((2.0 / 3.0) / rc9 - 1.0 / rc3);
 }
 // Avanza un paso temporal con velocity-Verlet y aplica las correcciones activas.
-void ArgonSimulator::integracion_verlet() {
+void ArgonSimulator::integracion_verlet(int paso, ResultadosSimulacion& resultados) {
     const double half_dt = 0.5 * dt;
     const double L = sistema.longitud_caja;
     
@@ -310,6 +311,17 @@ void ArgonSimulator::integracion_verlet() {
 
     // Calcular nuevas fuerzas usando r(t + dt)
     calcular_fuerzas();
+
+
+    // Verificar estabilidad numérica (solo warning, no detiene)
+    if (!verificar_estabilidad()) {
+        throw ErrorInestabilidadNumerica(
+            paso, 
+            dt, 
+            "Aceleraciones no finitas detectadas tras el cálculo de fuerzas.\n",
+            std::move(resultados)
+        );
+    }
 
     // Integrar la velocidad usando las nuevas aceleraciones
     // v(t + dt) = v(t + dt/2) + (1 / 2)*dt*a(t + dt)
@@ -374,19 +386,23 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
     
     // Abrir archivo de salida solo si se proporciona nombre_archivo
     std::optional<std::ofstream> archivo_salida;
+    std::ofstream* out = nullptr;
+
     if (nombre_archivo.has_value()) {
-        archivo_salida.emplace(*nombre_archivo);
+        static char buffer[1 << 16];
+        archivo_salida.emplace();
+        archivo_salida -> rdbuf() -> pubsetbuf(buffer, sizeof(buffer));
+        archivo_salida -> open(*nombre_archivo);
+
         if (!archivo_salida->is_open()) {
             throw std::runtime_error("Error: No se pudo abrir el archivo " + *nombre_archivo);
         }
 
         // Configuracion del formato
-        auto& out = *archivo_salida;
-        out << "paso,tiempo,temperatura,presion,energia_pot,energia_cin,energia_tot\n"
+        out = &(*archivo_salida);
+        *out << "paso,tiempo,temperatura,presion,energia_pot,energia_cin,energia_tot\n"
             << std::fixed
             << std::setprecision(std::numeric_limits<double>::max_digits10);
-
-        out.rdbuf() -> pubsetbuf(nullptr, 2>>15); // Reservar 64 kB para el csv
     }
     
     // Prealocar vectores para termodinámicas
@@ -406,19 +422,29 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         resultados.modulos_velocidades.reserve(tam_estimado_vel);
     }
     
+    // Preparar el timer para el progreso
+    using clock = std::chrono::steady_clock;
+    constexpr auto INTERVALO_PROGRESO = std::chrono::milliseconds(1000);
+    constexpr int ANCHO_BARRA         = 30;
+
+    auto t_inicio    = clock::now();
+    auto t_last      = t_inicio;
+    auto t_ventana   = t_inicio;
+    int paso_ventana = 0;
+    
     // Bucle principal de simulación
     for (int paso = 0; paso < config.num_pasos; ++paso) {
-        integracion_verlet();  // Avanzar dt
-        
+        integracion_verlet(paso, resultados);  // Avanzar dt
         propiedades_termodinamicas(); // Necesario para poder escalar durante el equilibrado
+        
         // Control de temperatura
         if (reescalar_velocidades && paso < config.pasos_equilibrado) {
             escalar_velocidades();
             propiedades_termodinamicas();  // Actualizar tras el escalado
         }
-
+        
         if (paso % config.frecuencia_muestreo == 0) {
-            const double tiempo = paso * dt;
+            const double tiempo        = paso * dt;
             const double energia_total = sistema.energia_potencial + sistema.energia_cinetica;
             
             // Guardar los datos en la estructura
@@ -431,26 +457,24 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             resultados.energias_totales.push_back(energia_total);
             
             // Escribir al archivo si está abierto
-            if (archivo_salida.has_value()) {
+            if (out) {
                 char linea[256];
-                int len = std::snprintf(linea, sizeof(linea),
+                int len = std::snprintf(
+                    linea,
+                    sizeof(linea),
                     "%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
                     paso, tiempo,
                     sistema.temperatura_inst,
                     sistema.presion_inst,
                     sistema.energia_potencial,
                     sistema.energia_cinetica,
-                    energia_total);
-
+                    energia_total
+                );
+                
                 if (len > 0) {
-
-                }; // REVIEW: ajustar para que imprima en precisión científica
+                    out -> write(linea, len);
+                };
             }
-            
-            // Mostrar progreso
-            std::cout << "Paso " << paso << "/" << config.num_pasos 
-                      << " - T=" << sistema.temperatura_inst 
-                      << " - P=" << sistema.presion_inst << std::endl;
         }
         
         // Muestreo de módulos de velocidad (solo si activado)
@@ -464,16 +488,78 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
                 resultados.modulos_velocidades.push_back(modulo);
             }
         }
+        
+        // Porcentaje de la simulación completada
+        auto ahora = clock::now();
+        if ((ahora - t_last)  > INTERVALO_PROGRESO ||
+            paso == config.num_pasos - 1) {
+            t_last = ahora;
+
+            double progreso      = double(paso + 1) / config.num_pasos;
+            double dt_ventana    = std::chrono::duration<double>(ahora - t_ventana).count();
+            int    pasos_ventana = (paso + 1) - paso_ventana;
+            double vel_reciente  = pasos_ventana / dt_ventana;
+            double eta           = (config.num_pasos - paso -  1) / vel_reciente;
+
+            int filled = static_cast<int>(progreso * ANCHO_BARRA);
+            std::cout   << "\r[" << std::string(filled, '#') 
+                        << std::string(ANCHO_BARRA - filled, ' ')
+                        << "] " << std::fixed << std::setprecision(1) 
+                        << (progreso * 100.0) << "% ETA: " << eta << "s   " << std::flush;
+        };
     }
+    
+    // Espaciar la barra de progreso
+    std::cout << "\n";
     
     if (archivo_salida.has_value()) {
         archivo_salida->close();
         std::cout << "Simulación completada. Datos guardados en " << *nombre_archivo << std::endl;
     } else {
         std::cout << "Simulación completada. Resultados en memoria." << std::endl;
-    }
+    };
     
     return resultados;  // Devolver los resultados estructurados
+}
+
+// Verifica la estabilidad numérica del sistema
+bool ArgonSimulator::verificar_estabilidad() const {
+    const int N = sistema.num_particulas;
+    auto valor_no_finito = [](double val) -> bool {
+        return std::isnan(val) || std::isinf(val);
+    };
+
+    // La fuente primaria de la explosión numérica es el cálculo de fuerzas.
+    for (int i = 0; i < N; ++i) {
+        if (valor_no_finito(sistema.ax[i]) ||
+            valor_no_finito(sistema.ay[i]) ||
+            valor_no_finito(sistema.az[i])) {
+            return false;
+        }
+    }
+
+    // Las velocidades pueden corromperse después de una aceleración inválida.
+    auto check_vector = [&valor_no_finito](const std::vector<double>& vec) -> bool {
+        for (double val : vec) {
+            if (valor_no_finito(val)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!check_vector(sistema.vx) || !check_vector(sistema.vy) || !check_vector(sistema.vz)) {
+        return false;
+    }
+
+    if (valor_no_finito(sistema.temperatura_inst) ||
+        valor_no_finito(sistema.presion_inst) ||
+        valor_no_finito(sistema.energia_potencial) ||
+        valor_no_finito(sistema.energia_cinetica)) {
+        return false;
+    }
+    
+    return true;
 }
 
 
