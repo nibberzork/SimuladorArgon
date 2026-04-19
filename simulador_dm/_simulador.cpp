@@ -6,10 +6,86 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+namespace {
+
+constexpr double UMBRAL_VELOCIDAD_COMPONENTE = 1e6;
+constexpr double UMBRAL_ACELERACION_COMPONENTE = 1e8;
+constexpr double UMBRAL_TEMPERATURA = 1e6;
+constexpr double UMBRAL_PRESION = 1e6;
+constexpr double UMBRAL_ENERGIA_ABS = 1e12;
+
+
+std::string describir_particula(const SistemaParticulas& sistema, int i) {
+    std::ostringstream oss;
+    oss << "Particula " << i
+        << " | r=(" << sistema.rx[i] << ", " << sistema.ry[i] << ", " << sistema.rz[i] << ")"
+        << " v=(" << sistema.vx[i] << ", " << sistema.vy[i] << ", " << sistema.vz[i] << ")"
+        << " a=(" << sistema.ax[i] << ", " << sistema.ay[i] << ", " << sistema.az[i] << ")";
+    return oss.str();
+}
+
+std::string diagnosticar_estado(const SistemaParticulas& sistema) {
+    for (int i = 0; i < sistema.num_particulas; ++i) {
+        if (!std::isfinite(sistema.rx[i]) || !std::isfinite(sistema.ry[i]) || !std::isfinite(sistema.rz[i])) {
+            return "Posiciones no finitas. " + describir_particula(sistema, i);
+        }
+        if (!std::isfinite(sistema.vx[i]) || !std::isfinite(sistema.vy[i]) || !std::isfinite(sistema.vz[i])) {
+            return "Velocidades no finitas. " + describir_particula(sistema, i);
+        }
+        if (std::abs(sistema.vx[i]) > UMBRAL_VELOCIDAD_COMPONENTE ||
+            std::abs(sistema.vy[i]) > UMBRAL_VELOCIDAD_COMPONENTE ||
+            std::abs(sistema.vz[i]) > UMBRAL_VELOCIDAD_COMPONENTE) {
+            return "Velocidades desbocadas. " + describir_particula(sistema, i);
+        }
+        if (!std::isfinite(sistema.ax[i]) || !std::isfinite(sistema.ay[i]) || !std::isfinite(sistema.az[i])) {
+            return "Aceleraciones no finitas. " + describir_particula(sistema, i);
+        }
+        if (std::abs(sistema.ax[i]) > UMBRAL_ACELERACION_COMPONENTE ||
+            std::abs(sistema.ay[i]) > UMBRAL_ACELERACION_COMPONENTE ||
+            std::abs(sistema.az[i]) > UMBRAL_ACELERACION_COMPONENTE) {
+            return "Aceleraciones desbocadas. " + describir_particula(sistema, i);
+        }
+    }
+
+    if (!std::isfinite(sistema.energia_potencial)) {
+        return "Energia potencial no finita: " + std::to_string(sistema.energia_potencial);
+    }
+    if (std::abs(sistema.energia_potencial) > UMBRAL_ENERGIA_ABS) {
+        return "Energia potencial excesiva: " + std::to_string(sistema.energia_potencial);
+    }
+    if (!std::isfinite(sistema.energia_cinetica)) {
+        return "Energia cinetica no finita: " + std::to_string(sistema.energia_cinetica);
+    }
+    if (std::abs(sistema.energia_cinetica) > UMBRAL_ENERGIA_ABS) {
+        return "Energia cinetica excesiva: " + std::to_string(sistema.energia_cinetica);
+    }
+    if (!std::isfinite(sistema.temperatura_inst)) {
+        return "Temperatura no finita: " + std::to_string(sistema.temperatura_inst);
+    }
+    if (std::abs(sistema.temperatura_inst) > UMBRAL_TEMPERATURA) {
+        return "Temperatura excesiva: " + std::to_string(sistema.temperatura_inst);
+    }
+    if (!std::isfinite(sistema.presion_inst)) {
+        return "Presion no finita: " + std::to_string(sistema.presion_inst);
+    }
+    if (std::abs(sistema.presion_inst) > UMBRAL_PRESION) {
+        return "Presion excesiva: " + std::to_string(sistema.presion_inst);
+    }
+    if (!std::isfinite(sistema.virial)) {
+        return "Virial no finito: " + std::to_string(sistema.virial);
+    }
+
+    return {};
+}
+
+}
 
 // Construye el estado base del simulador y fija los interruptores de estudio.
 ArgonSimulator::ArgonSimulator(
@@ -34,7 +110,7 @@ ArgonSimulator::ArgonSimulator(
     sistema.longitud_caja = std::pow(static_cast<double>(sistema.num_particulas) / densidad_reducida, 1.0/3.0); // L* = (N / rho*)^(1/3)
 
     // Precalcular parámetros de las listas enlazadas
-    sistema.nc = static_cast<int>(std::floor(sistema.longitud_caja / R_CORTE));
+    sistema.nc = std::max(1, static_cast<int>(std::floor(sistema.longitud_caja / R_CORTE)));
     sistema.celda_tam = sistema.longitud_caja / sistema.nc;
 
     const int N = sistema.num_particulas; // Número de partículas
@@ -210,16 +286,31 @@ void ArgonSimulator::calcular_fuerzas() {
         // Construcción de la estructura de listas enlazadas, se toma la última particula
         // como cabecera y se va enlazando con la partícula anterior
         for (int i = 0; i < N; ++i) {
+            if (!std::isfinite(sistema.rx[i]) || !std::isfinite(sistema.ry[i]) || !std::isfinite(sistema.rz[i])) {
+                throw std::runtime_error(
+                    "Posiciones no finitas detectadas al construir cell lists. " +
+                    describir_particula(sistema, i)
+                );
+            }
+
             int cx = static_cast<int>(sistema.rx[i] / celda_tam); // Indice de celda respecto a x
             int cy = static_cast<int>(sistema.ry[i] / celda_tam); // Indice de celda respecto a y
             int cz = static_cast<int>(sistema.rz[i] / celda_tam); // Indice de celda respecto a z
 
             // Si hay particulas en el borde exacto, se debe restar 1 para evitar desbordamiento en lista[]
-            cx = std::min(cx, nc - 1);
-            cy = std::min(cy, nc - 1);
-            cz = std::min(cz, nc - 1);
+            cx = std::max(0, std::min(cx, nc - 1));
+            cy = std::max(0, std::min(cy, nc - 1));
+            cz = std::max(0, std::min(cz, nc - 1));
 
             const int idx = cx + cy * nc + cz * nc * nc;
+            if (idx < 0 || idx >= static_cast<int>(sistema.cabeza.size())) {
+                std::ostringstream oss;
+                oss << "Indice de celda fuera de rango al construir cell lists: idx=" << idx
+                    << " con (cx, cy, cz)=(" << cx << ", " << cy << ", " << cz << ") "
+                    << "nc=" << nc << " celda_tam=" << celda_tam << ". "
+                    << describir_particula(sistema, i);
+                throw std::runtime_error(oss.str());
+            }
             sistema.lista[i]    = sistema.cabeza[idx];   // el nuevo nodo apunta al anterior primero
             sistema.cabeza[idx] = i;                     // ahora i es la cabeza de la celda
         }
@@ -309,16 +400,30 @@ void ArgonSimulator::integracion_verlet(int paso, ResultadosSimulacion& resultad
         sistema.rz[i] -= L * std::floor(sistema.rz[i] / L);
     };
 
+    const std::string diagnostico_pre_fuerzas = diagnosticar_estado(sistema);
+    if (!diagnostico_pre_fuerzas.empty()) {
+        std::cout << "\n[CPP] Inestabilidad detectada antes de calcular fuerzas en paso "
+                  << paso << ": " << diagnostico_pre_fuerzas << std::flush;
+        throw ErrorInestabilidadNumerica(
+            paso, dt,
+            diagnostico_pre_fuerzas + "\n",
+            std::move(resultados)
+        );
+    }
+
     // Calcular nuevas fuerzas usando r(t + dt)
     calcular_fuerzas();
 
 
     // Verificar estabilidad numérica (solo warning, no detiene)
     if (!verificar_estabilidad()) {
+        const std::string diagnostico = diagnosticar_estado(sistema);
+        std::cout << "\n[CPP] Inestabilidad detectada en paso " << paso 
+                << ", construyendo excepción..." << std::flush;
         throw ErrorInestabilidadNumerica(
-            paso, 
-            dt, 
-            "Aceleraciones no finitas detectadas tras el cálculo de fuerzas.\n",
+            paso, dt,
+            (diagnostico.empty() ? std::string("Estado no finito detectado sin diagnostico adicional.\n")
+                                 : diagnostico + "\n"),
             std::move(resultados)
         );
     }
@@ -400,7 +505,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
 
         // Configuracion del formato
         out = &(*archivo_salida);
-        *out << "paso,tiempo,temperatura,presion,energia_pot,energia_cin,energia_tot\n"
+        *out << "paso,tiempo,temperatura,presion,energia_potencial,energia_cinetica,energia_total\n"
             << std::fixed
             << std::setprecision(std::numeric_limits<double>::max_digits10);
     }
@@ -434,7 +539,22 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
     
     // Bucle principal de simulación
     for (int paso = 0; paso < config.num_pasos; ++paso) {
-        integracion_verlet(paso, resultados);  // Avanzar dt
+        try {
+            integracion_verlet(paso, resultados);
+        } catch (ErrorInestabilidadNumerica& e) {
+            std::cout << "\n[CPP] ErrorInestabilidadNumerica capturado en paso " 
+                    << paso << std::flush;
+            if (archivo_salida.has_value()) {
+                std::cout << "\n[CPP] Cerrando archivo..." << std::flush;
+                archivo_salida->close();
+                std::cout << "\n[CPP] Archivo cerrado." << std::flush;
+            }
+            std::cout << "\n[CPP] Relanzando excepción..." << std::flush;
+            throw;
+        }
+        
+
+
         propiedades_termodinamicas(); // Necesario para poder escalar durante el equilibrado
         
         // Control de temperatura
@@ -524,42 +644,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
 
 // Verifica la estabilidad numérica del sistema
 bool ArgonSimulator::verificar_estabilidad() const {
-    const int N = sistema.num_particulas;
-    auto valor_no_finito = [](double val) -> bool {
-        return std::isnan(val) || std::isinf(val);
-    };
-
-    // La fuente primaria de la explosión numérica es el cálculo de fuerzas.
-    for (int i = 0; i < N; ++i) {
-        if (valor_no_finito(sistema.ax[i]) ||
-            valor_no_finito(sistema.ay[i]) ||
-            valor_no_finito(sistema.az[i])) {
-            return false;
-        }
-    }
-
-    // Las velocidades pueden corromperse después de una aceleración inválida.
-    auto check_vector = [&valor_no_finito](const std::vector<double>& vec) -> bool {
-        for (double val : vec) {
-            if (valor_no_finito(val)) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!check_vector(sistema.vx) || !check_vector(sistema.vy) || !check_vector(sistema.vz)) {
-        return false;
-    }
-
-    if (valor_no_finito(sistema.temperatura_inst) ||
-        valor_no_finito(sistema.presion_inst) ||
-        valor_no_finito(sistema.energia_potencial) ||
-        valor_no_finito(sistema.energia_cinetica)) {
-        return false;
-    }
-    
-    return true;
+    return diagnosticar_estado(sistema).empty();
 }
 
 

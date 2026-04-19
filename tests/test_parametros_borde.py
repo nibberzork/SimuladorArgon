@@ -62,7 +62,7 @@ def test_ejecutar_devuelve_velocidades_y_guarda_npy_sin_extension():
     assert np.array_equal(velocidades, velocidades_guardadas)
 
 
-def test_reutiliza_csv_y_npy_existentes_cuando_no_fuerza_calculo():
+def test_reutiliza_csv_y_npy_cuando_no_fuerza_calculo():
     OUTPUT_DIR.mkdir(exist_ok=True)
     csv_path = OUTPUT_DIR / "cache_parametros.csv"
     npy_path = OUTPUT_DIR / "cache_parametros_vel.npy"

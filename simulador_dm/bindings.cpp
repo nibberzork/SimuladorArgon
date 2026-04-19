@@ -1,10 +1,23 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <iostream>
 #include "_simulador.hpp"
+
+#ifndef _WIN32
+#include <windows.h>
+#endif
+
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(simulador, m) {
+
+    #ifndef _WIN32
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+    #endif
+
+
     m.doc() = "Módulo de simulación molecular para Argón";
 
     py::class_<ConfiguracionSimulacion>(m, "ConfiguracionSimulacion")
@@ -56,10 +69,16 @@ PYBIND11_MODULE(simulador, m) {
                 try {
                     return self.ejecutar(cfg, archivo);
                 } catch (ErrorInestabilidadNumerica& e) {
+                    std::cout << "\n[BIND] Excepción capturada en bindings, what(): " 
+                            << e.what() << std::flush;
+                    std::cout << "\n[BIND] Accediendo a resultados_parciales..." << std::flush;
+                    auto rp = e.resultados_parciales;  // copia explícita antes de tocar Python
+                    std::cout << "\n[BIND] resultados_parciales.pasos.size() = " 
+                            << rp.pasos.size() << std::flush;
                     py::object exc = py::module_::import("simulador_dm.simulador")
                         .attr("ErrorInestabilidadNumerica");
                     py::object exc_inst = exc(e.what());
-                    exc_inst.attr("resultados_parciales") = e.resultados_parciales;
+                    exc_inst.attr("resultados_parciales") = rp;
                     PyErr_SetObject(exc.ptr(), exc_inst.ptr());
                     throw py::error_already_set();
                 }
@@ -68,4 +87,3 @@ PYBIND11_MODULE(simulador, m) {
             py::arg("nombre_archivo") = py::none()
         );
 }
-
