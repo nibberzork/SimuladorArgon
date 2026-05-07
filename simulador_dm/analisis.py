@@ -89,6 +89,10 @@ def graficar_energia(
     *,
     ax=None,
     figsize=(9, 4.5),
+    color="steelblue",
+    label=None,
+    mostrar_cutoff=True,
+    mostrar_estadisticas=True,
 ) -> plt.Axes:
     """
     Representa la energía total del sistema respecto al tiempo o al paso.
@@ -104,6 +108,14 @@ def graficar_energia(
         Eje sobre el que dibujar. Si no se pasa, se crea uno nuevo.
     figsize : tuple, optional
         Tamaño de la figura si se crea un eje nuevo.
+    color : str, optional
+        Color de la curva principal.
+    label : str, optional
+        Etiqueta de la curva para la leyenda.
+    mostrar_cutoff : bool, optional
+        Si es True, dibuja la línea vertical correspondiente al cutoff.
+    mostrar_estadisticas : bool, optional
+        Si es True, dibuja media y banda min/max tras el equilibrado.
 
     Returns
     -------
@@ -119,13 +131,16 @@ def graficar_energia(
     ax.plot(
         df[columna_x],
         df["energia_total"],
-        color="steelblue",
+        color=color,
         linewidth=1.6,
+        label=label,
     )
 
-    _dibujar_linea_cutoff(ax, df, cutoff, columna_x)
+    if mostrar_cutoff:
+        _dibujar_linea_cutoff(ax, df, cutoff, columna_x)
 
-    _dibujar_estadisticas(ax, df, cutoff, "energia_total")
+    if mostrar_estadisticas:
+        _dibujar_estadisticas(ax, df, cutoff, "energia_total")
 
     ax.set_title("Energía total")
     ax.set_xlabel(etiqueta_x)
@@ -223,6 +238,90 @@ def graficar_resumen_termodinamico(
     return fig, axes
 
 
+def graficar_convergencia_variable(
+    df: pd.DataFrame,
+    columna: str = "temperatura",
+    cutoff=None,
+    *,
+    ax=None,
+    figsize=(10, 4.8),
+    color="firebrick",
+) -> plt.Axes:
+    """
+    Representa la evolución temporal de una magnitud junto con su media
+    en equilibrio y una banda delimitada por los valores mínimo y máximo.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame con las magnitudes termodinámicas.
+    columna : str, optional
+        Columna a representar. Por defecto ``"temperatura"``.
+    cutoff : int, optional
+        Paso a partir del cual se considera finalizado el equilibrado.
+    ax : matplotlib.axes.Axes, optional
+        Eje sobre el que dibujar. Si no se pasa, se crea uno nuevo.
+    figsize : tuple, optional
+        Tamaño de la figura si se crea un eje nuevo.
+    color : str, optional
+        Color de la curva principal.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        Eje con la gráfica generada.
+    """
+    _validar_columnas(df, [columna])
+    columna_x, etiqueta_x = _obtener_eje_x(df)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    filas_estables = df[df["paso"] >= cutoff] if cutoff and "paso" in df.columns else df
+
+    ax.plot(
+        df[columna_x],
+        df[columna],
+        color=color,
+        linewidth=1.3,
+        alpha=0.9,
+        label=f"{columna.capitalize()} instantánea",
+    )
+
+    _dibujar_linea_cutoff(ax, df, cutoff, columna_x)
+
+    if not filas_estables.empty:
+        media = filas_estables[columna].mean()
+        minimo = filas_estables[columna].min()
+        maximo = filas_estables[columna].max()
+
+        ax.axhline(
+            media,
+            color="black",
+            linestyle="-.",
+            linewidth=1.5,
+            label=f"Media en equilibrio = {media:.4f}",
+        )
+        ax.fill_between(
+            df[columna_x],
+            minimo,
+            maximo,
+            color="gray",
+            alpha=0.18,
+            label=f"Banda min-max = [{minimo:.4f}, {maximo:.4f}]",
+        )
+
+    unidad = _UNIDADES.get(columna, columna)
+    titulo = f"Convergencia de {columna.replace('_', ' ')}"
+    ax.set_title(titulo.capitalize())
+    ax.set_xlabel(etiqueta_x)
+    ax.set_ylabel(unidad)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    return ax
+
+
 def graficar_histograma_velocidades(
     velocidades,
     *,
@@ -303,4 +402,3 @@ def graficar_histograma_velocidades(
     #     fig.savefig(str(filepath), bbox_inches="tight")
 
     # return fig
-
