@@ -173,11 +173,8 @@ class WraperSimulador:
 
         # TODO: Capturar el error y extraer los datos parciales relanzando un warning para que no corte la ejecución
         try:
-            print("[DEBUG] Iniciando simulación C++...")
             resultados = self._sim.ejecutar(config, csv)
-            print("[DEBUG] Simulación completada sin errores.")
         except ErrorInestabilidadNumerica as e:
-            print(f"[DEBUG] ErrorInestabilidadNumerica capturado: {e}")
             warnings.warn(
                 f"Simulación terminada prematuramente: {e}. "
                 "Se devuelven los datos parciales hasta el momento de la explosión numérica.",
@@ -186,7 +183,6 @@ class WraperSimulador:
             )
             resultados = e.resultados_parciales
         except Exception as e:
-            print(f"[DEBUG] Excepción inesperada tipo {type(e).__name__}: {e}")
             raise
         
         # Crear DataFrame con termodinámicas

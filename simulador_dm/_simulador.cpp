@@ -252,7 +252,7 @@ void ArgonSimulator::calcular_fuerzas() {
         double fay = factor * dy;
         double faz = factor * dz;
 
-        // Segun la 3ra ley de newton, toda acción tiene
+        // Segun la 3ra ley de newton, toda acción equivalente en sentido contrario
         sistema.ax[i] += fax;  sistema.ay[i] += fay;  sistema.az[i] += faz;
         sistema.ax[j] -= fax;  sistema.ay[j] -= fay;  sistema.az[j] -= faz;
 
@@ -461,7 +461,10 @@ void ArgonSimulator::propiedades_termodinamicas() {
     // Presión: P = ρ T + (1/(3V)) r_ij · f^ij
     // El término virial ya se calculó en calcular_fuerzas()
     const double rho = N / V;
-    sistema.presion_inst = rho * sistema.temperatura_inst + sistema.virial / (3.0 * V);
+    sistema.presion_cinetica = rho * sistema.temperatura_inst; // ρ T
+    sistema.presion_inst     = sistema.presion_cinetica
+                               + sistema.virial / (3.0 * V);
+
     if (correccion_presion_cola) {
         sistema.presion_inst += sistema.presion_correccion_cola; // Corrección de largo alcance
     }
@@ -469,17 +472,25 @@ void ArgonSimulator::propiedades_termodinamicas() {
 // Reescala todas las velocidades para aproximar la temperatura objetivo.
 void ArgonSimulator::escalar_velocidades() {
     // Si por lo que sea hay un bug sobre la temperatura se salta el escalado
-    if (sistema.temperatura_inst > 0.0) {
-        // Forzar la temperatura según el factor
-        const double factor = std::sqrt(temp_referencia / sistema.temperatura_inst);
-        
-        // Escalado a las particulas
-        for (int i = 0; i < sistema.num_particulas; ++i) {
-            sistema.vx[i] *= factor;
-            sistema.vy[i] *= factor;
-            sistema.vz[i] *= factor;
-        }
+    if (sistema.temperatura_inst <= 0.0) return;
+    
+    // Forzar la temperatura según el factor
+    const double factor2 = temp_referencia / sistema.temperatura_inst;
+    const double factor  = std::sqrt(factor2);
+    
+    // Escalado a las particulas
+    for (int i = 0; i < sistema.num_particulas; ++i) {
+        sistema.vx[i] *= factor;
+        sistema.vy[i] *= factor;
+        sistema.vz[i] *= factor;
     }
+
+    // Escalar las propiedades termodinámicas relacionadas para mantener la consistencia
+    sistema.energia_cinetica *= factor2; // K' = s^2 * K
+    sistema.temperatura_inst *= factor2; // Matemáticamente, es igual a fijar la temperatura, pero se recalcula para mayor claridad (T' = s^2 * T = (T_ref / T) * T = T_ref)
+
+    sistema.presion_inst     += sistema.presion_cinetica * (factor2 - 1.0);
+    sistema.presion_cinetica *= factor2; // P_kin' = ρ T' = ρ s^2 T = s^2 P_kin 
 }
 // Ejecuta el bucle completo de dinámica molecular y muestrea las magnitudes pedidas.
 ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& config,
@@ -559,8 +570,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         
         // Control de temperatura
         if (reescalar_velocidades && paso < config.pasos_equilibrado) {
-            escalar_velocidades();
-            propiedades_termodinamicas();  // Actualizar tras el escalado
+            escalar_velocidades(); // Internamente escala tambien las propiedades termodinámicas relacionadas para mantener la consistencia
         }
         
         if (paso % config.frecuencia_muestreo == 0) {

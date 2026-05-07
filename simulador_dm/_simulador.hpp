@@ -23,12 +23,13 @@ struct SistemaParticulas {
 
 
     // Variables termodinámicas
-    double energia_potencial = 0.0;     ///< Energía potencial total (U*)
-    double energia_cinetica = 0.0;      ///< Energía cinética total (K*)
-    double temperatura_inst = 0.0;      ///< Temperatura instantánea (T*)
-    double presion_inst = 0.0;          ///< Presión instantánea (P*)
-    double presion_correccion_cola = 0.0; ///< Corrección de presión de largo alcance
-    double virial = 0.0;                ///< Virial para cálculo de presión (W*)
+    double energia_potencial = 0.0;         ///< Energía potencial total (U*)
+    double energia_cinetica = 0.0;          ///< Energía cinética total (K*)
+    double temperatura_inst = 0.0;          ///< Temperatura instantánea (T*)
+    double presion_inst = 0.0;              ///< Presión instantánea (P*)
+    double presion_cinetica = 0.0;          ///< Componente cinética de la presión (ρ*T)
+    double presion_correccion_cola = 0.0;   ///< Corrección de presión de largo alcance
+    double virial = 0.0;                    ///< Virial para cálculo de presión (W*)
     
     // Parámetros precalculados de cell lists
     int nc = 0;         ///< Número de celdas por lado (nc × nc × nc celdas totales)
@@ -240,6 +241,9 @@ private:
      * habilitado para estabilizar el sistema.
      * 
      * @note factor = √(T_ref / T_actual)
+     * @note Actualiza internamente temperatura_inst, energia_cinetica,
+     *         presion_cinetica y presion_inst; no es necesario llamar a
+     *         propiedades_termodinamicas() tras este método.
      * @note Se aplica solo durante los primeros pasos (fase de equilibrado)
      * @warning No debe usarse después del equilibrado para evitar sesgos
      */
