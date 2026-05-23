@@ -120,10 +120,9 @@ public:
     /**
      * @brief Ejecuta la simulación completa
      * @param config Configuración de la simulación
-     * @param nombre_archivo Archivo de salida opcional para guardar trayectorias
      * @return ResultadosSimulacion con los datos muestreados
      */
-    ResultadosSimulacion ejecutar(const ConfiguracionSimulacion& config, const std::optional<std::string>& nombre_archivo = std::nullopt);
+    ResultadosSimulacion ejecutar(const ConfiguracionSimulacion& config);
 
     /**
      * @brief Obtiene la temperatura instantánea actual
@@ -193,6 +192,13 @@ private:
      * @warning Se ejecuta antes y después de la integración Verlet
      */
     void calcular_fuerzas();
+    
+    /**
+     * @brief Calcula fuerzas entre un par de partículas y acumula en buffers locales
+     * 
+     * Versión paralelizable que acumula en vectores locales para evitar races.
+     */
+    void calcular_par_fuerzas(int i, int j, std::vector<double>& ax_local, std::vector<double>& ay_local, std::vector<double>& az_local, double& ep_local, double& virial_local);
     
     
     /**

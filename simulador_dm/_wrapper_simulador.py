@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import warnings
+from os.path import exists
 from . import simulador as _simulador_mod
 
 ArgonSimulator = _simulador_mod.ArgonSimulator
@@ -79,6 +80,7 @@ class WraperSimulador:
             correccion_presion_cola,
             reescalar_velocidades,
         )
+        self.num_particulas = particulas_por_lado ** 3
 
     def ejecutar(self,
                  num_pasos: int = 25000,
@@ -152,7 +154,6 @@ class WraperSimulador:
         un `RuntimeWarning` y devuelve los datos parciales disponibles.
         """
         if not forzar_calculo and csv is not None:
-            from os.path import exists
             if exists(csv):
                 df = pd.read_csv(csv)
                 velocidades_array = np.empty((0,), dtype=np.float64)
@@ -173,7 +174,7 @@ class WraperSimulador:
 
         # TODO: Capturar el error y extraer los datos parciales relanzando un warning para que no corte la ejecución
         try:
-            resultados = self._sim.ejecutar(config, csv)
+            resultados = self._sim.ejecutar(config)
         except ErrorInestabilidadNumerica as e:
             warnings.warn(
                 f"Simulación terminada prematuramente: {e}. "
@@ -198,9 +199,9 @@ class WraperSimulador:
         
         # Exponer módulos de velocidad como array NumPy
         if muestrear_velocidades:
-            velocidades_array = np.array(resultados.modulos_velocidades, dtype=np.float64)
+            velocidades_array = np.array(resultados.modulos_velocidades, dtype=np.float64).reshape(-1, self.num_particulas)
         else:
-            velocidades_array = np.empty((0,), dtype=np.float64)
+            velocidades_array = np.empty((0, self.num_particulas), dtype=np.float64)
         
         
         # Guardar DataFrame en CSV si se especifica

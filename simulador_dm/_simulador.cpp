@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <sstream>
 #include <limits>
+#include <omp.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -215,61 +216,23 @@ void ArgonSimulator::calcular_fuerzas() {
     const int N = sistema.num_particulas;
     const double L = sistema.longitud_caja;
 
-
     // Reiniciar aceleraciones y energía potencial
     std::fill(sistema.ax.begin(), sistema.ax.end(), 0.0);
     std::fill(sistema.ay.begin(), sistema.ay.end(), 0.0);
     std::fill(sistema.az.begin(), sistema.az.end(), 0.0);
     sistema.energia_potencial = 0.0;
-    sistema.virial = 0.0;   //  r_ij * f^ij, necesario para la presión
-
-
-    // Función para calcular fuerzas entre un par de partículas
-    auto calcular_par_fuerzas = [&](int i, int j) {
-
-        double dx = sistema.rx[i] - sistema.rx[j];
-        double dy = sistema.ry[i] - sistema.ry[j];
-        double dz = sistema.rz[i] - sistema.rz[j];
-
-        // Imagen mínima usando redondeo para manejar desplazamientos
-        // mayores que una longitud de caja de forma robusta.
-        dx -= L * std::round(dx / L);
-        dy -= L * std::round(dy / L);
-        dz -= L * std::round(dz / L);
-
-
-        const double r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 >= R_CORTE_SQ || r2 < 1e-10) return;
-
-        const double r2inv  = 1.0 / r2;
-        const double r6inv  = r2inv * r2inv * r2inv;   // 1/r^6
-        const double r12inv = r6inv * r6inv;            // 1/r^12
-
-        const double factor = COEF_FUERZA * r2inv * (r12inv - 0.5 * r6inv);
-                
-        // Limitar fuerzas extremadamente grandes para estabilidad
-        double fax = factor * dx;
-        double fay = factor * dy;
-        double faz = factor * dz;
-
-        // Segun la 3ra ley de newton, toda acción equivalente en sentido contrario
-        sistema.ax[i] += fax;  sistema.ay[i] += fay;  sistema.az[i] += faz;
-        sistema.ax[j] -= fax;  sistema.ay[j] -= fay;  sistema.az[j] -= faz;
-
-        // Energía potencial: U* = 4*(r^{-12} - r^{-6})
-        sistema.energia_potencial += COEF_ENERGIA * (r12inv - r6inv);
-
-        // Virial: r_ij * f_ij = factor * r^2       (f_ij = factor * r_ij)
-        sistema.virial += factor * r2;
-    };
+    sistema.virial = 0.0;   // r_ij * f^ij, necesario para la presión
 
     const int nc = sistema.nc;
 
     if (nc < 3) {
-        // Si los pares estan muy juntos y no hay espacio se calculan todos los pares
-        for (int i = 0; i < N; ++i)
-        for (int j = i + 1; j < N; ++j)
-            calcular_par_fuerzas(i, j);
+        // Si los pares están muy juntos y no hay espacio, se calculan todos los pares
+        #pragma omp parallel for
+        for (int i = 0; i < N; ++i) {
+            for (int j = i + 1; j < N; ++j) {
+                calcular_par_fuerzas(i, j, sistema.ax, sistema.ay, sistema.az, sistema.energia_potencial, sistema.virial);
+            }
+        }
         return;
     } else {
         // Listas de celdas
@@ -281,10 +244,7 @@ void ArgonSimulator::calcular_fuerzas() {
         std::fill(sistema.cabeza.begin(), sistema.cabeza.end(), -1);
         std::fill(sistema.lista.begin(), sistema.lista.end(), -1);
 
-
-
-        // Construcción de la estructura de listas enlazadas, se toma la última particula
-        // como cabecera y se va enlazando con la partícula anterior
+        // Construcción de la estructura de listas enlazadas
         for (int i = 0; i < N; ++i) {
             if (!std::isfinite(sistema.rx[i]) || !std::isfinite(sistema.ry[i]) || !std::isfinite(sistema.rz[i])) {
                 throw std::runtime_error(
@@ -305,16 +265,15 @@ void ArgonSimulator::calcular_fuerzas() {
             const int idx = cx + cy * nc + cz * nc * nc;
             if (idx < 0 || idx >= static_cast<int>(sistema.cabeza.size())) {
                 std::ostringstream oss;
-                oss << "Indice de celda fuera de rango al construir cell lists: idx=" << idx
+                oss << "Índice de celda fuera de rango al construir cell lists: idx=" << idx
                     << " con (cx, cy, cz)=(" << cx << ", " << cy << ", " << cz << ") "
                     << "nc=" << nc << " celda_tam=" << celda_tam << ". "
                     << describir_particula(sistema, i);
                 throw std::runtime_error(oss.str());
             }
-            sistema.lista[i]    = sistema.cabeza[idx];   // el nuevo nodo apunta al anterior primero
-            sistema.cabeza[idx] = i;                     // ahora i es la cabeza de la celda
+            sistema.lista[i] = sistema.cabeza[idx];
+            sistema.cabeza[idx] = i;
         }
-
 
         // Semi-vecindad: 13 desplazamientos + celda propia
         static const int SEMI_NB[13][3] = {
@@ -328,34 +287,104 @@ void ArgonSimulator::calcular_fuerzas() {
             {+1,  0,  0}
         };
 
-        // Bucle principal sobre celdas
-        for (int cz = 0; cz < nc; ++cz) {
-        for (int cy = 0; cy < nc; ++cy) {
-        for (int cx = 0; cx < nc; ++cx) {
+        // Procesar por colores para paralelización sin races
+        const int num_colores = 8;
+        for (int color = 0; color < num_colores; ++color) {
+            #pragma omp parallel
+            {
+                // Buffers locales por hilo
+                std::vector<double> ax_local(N, 0.0);
+                std::vector<double> ay_local(N, 0.0);
+                std::vector<double> az_local(N, 0.0);
+                double ep_local = 0.0;
+                double virial_local = 0.0;
 
-            const int idx_self = cx + cy * nc + cz * nc * nc;
+                // Bucle sobre celdas del color actual
+                #pragma omp for
+                for (int cidx = 0; cidx < nc * nc * nc; ++cidx) {
+                    int cx = cidx % nc;
+                    int cy = (cidx / nc) % nc;
+                    int cz = cidx / (nc * nc);
 
-            // Pares dentro de la misma celda (j > i)
-            for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
-            for (int j = sistema.lista[i];         j != -1; j = sistema.lista[j]) {
-                calcular_par_fuerzas(i, j);
-            }}
+                    // Verificar si la celda pertenece al color
+                    int celda_color = (cx % 2) + 2 * (cy % 2) + 4 * (cz % 2);
+                    if (celda_color != color) continue;
 
-            // Pares con las 13 celdas de la semi-vecindad
-            for (int nb = 0; nb < 13; ++nb) {
-                const int nx = (cx + SEMI_NB[nb][0] + nc) % nc;
-                const int ny = (cy + SEMI_NB[nb][1] + nc) % nc;
-                const int nz = (cz + SEMI_NB[nb][2] + nc) % nc;
-                const int idx_nb = nx + ny * nc + nz * nc * nc;
+                    const int idx_self = cx + cy * nc + cz * nc * nc;
 
-                for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
-                for (int j = sistema.cabeza[idx_nb];   j != -1; j = sistema.lista[j]) {
-                    calcular_par_fuerzas(i, j);
-                }}
+                    // Pares dentro de la misma celda (j > i)
+                    for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
+                        for (int j = sistema.lista[i]; j != -1; j = sistema.lista[j]) {
+                            calcular_par_fuerzas(i, j, ax_local, ay_local, az_local, ep_local, virial_local);
+                        }
+                    }
+
+                    // Pares con las 13 celdas de la semi-vecindad
+                    for (int nb = 0; nb < 13; ++nb) {
+                        const int nx = (cx + SEMI_NB[nb][0] + nc) % nc;
+                        const int ny = (cy + SEMI_NB[nb][1] + nc) % nc;
+                        const int nz = (cz + SEMI_NB[nb][2] + nc) % nc;
+                        const int idx_nb = nx + ny * nc + nz * nc * nc;
+
+                        for (int i = sistema.cabeza[idx_self]; i != -1; i = sistema.lista[i]) {
+                            for (int j = sistema.cabeza[idx_nb]; j != -1; j = sistema.lista[j]) {
+                                calcular_par_fuerzas(i, j, ax_local, ay_local, az_local, ep_local, virial_local);
+                            }
+                        }
+                    }
+                }
+
+                // Reducir buffers locales a globales
+                #pragma omp critical
+                {
+                    for (int i = 0; i < N; ++i) {
+                        sistema.ax[i] += ax_local[i];
+                        sistema.ay[i] += ay_local[i];
+                        sistema.az[i] += az_local[i];
+                    }
+                    sistema.energia_potencial += ep_local;
+                    sistema.virial += virial_local;
+                }
             }
-
-        }}} // fin bucle celdas cx, cy, cz
+        }
     }
+}
+
+// Calcula fuerzas entre un par de partículas y acumula en buffers locales
+void ArgonSimulator::calcular_par_fuerzas(int i, int j, std::vector<double>& ax_local, std::vector<double>& ay_local, std::vector<double>& az_local, double& ep_local, double& virial_local) {
+    double dx = sistema.rx[i] - sistema.rx[j];
+    double dy = sistema.ry[i] - sistema.ry[j];
+    double dz = sistema.rz[i] - sistema.rz[j];
+
+    // Imagen mínima
+    const double L = sistema.longitud_caja;
+    dx -= L * std::round(dx / L);
+    dy -= L * std::round(dy / L);
+    dz -= L * std::round(dz / L);
+
+    const double r2 = dx * dx + dy * dy + dz * dz;
+    if (r2 >= R_CORTE_SQ || r2 < 1e-10) return;
+
+    const double r2inv = 1.0 / r2;
+    const double r6inv = r2inv * r2inv * r2inv;
+    const double r12inv = r6inv * r6inv;
+
+    const double factor = COEF_FUERZA * r2inv * (r12inv - 0.5 * r6inv);
+
+    double fax = factor * dx;
+    double fay = factor * dy;
+    double faz = factor * dz;
+
+    // Acumular en buffers locales
+    ax_local[i] += fax;
+    ay_local[i] += fay;
+    az_local[i] += faz;
+    ax_local[j] -= fax;
+    ay_local[j] -= fay;
+    az_local[j] -= faz;
+
+    ep_local += COEF_ENERGIA * (r12inv - r6inv);
+    virial_local += factor * r2;
 }
 
 // Precalcula la corrección analítica de cola asociada al truncamiento del potencial.
@@ -493,34 +522,12 @@ void ArgonSimulator::escalar_velocidades() {
     sistema.presion_cinetica *= factor2; // P_kin' = ρ T' = ρ s^2 T = s^2 P_kin 
 }
 // Ejecuta el bucle completo de dinámica molecular y muestrea las magnitudes pedidas.
-ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& config,
-                                              const std::optional<std::string>& nombre_archivo) {
+ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& config) {
     // Inicializar sistema
     inicializar_sistema();
     
     ResultadosSimulacion resultados;  // Objeto para almacenar resultados
-    
-    // Abrir archivo de salida solo si se proporciona nombre_archivo
-    std::optional<std::ofstream> archivo_salida;
-    std::ofstream* out = nullptr;
 
-    if (nombre_archivo.has_value()) {
-        static char buffer[1 << 16];
-        archivo_salida.emplace();
-        archivo_salida -> rdbuf() -> pubsetbuf(buffer, sizeof(buffer));
-        archivo_salida -> open(*nombre_archivo);
-
-        if (!archivo_salida->is_open()) {
-            throw std::runtime_error("Error: No se pudo abrir el archivo " + *nombre_archivo);
-        }
-
-        // Configuracion del formato
-        out = &(*archivo_salida);
-        *out << "paso,tiempo,temperatura,presion,energia_potencial,energia_cinetica,energia_total\n"
-            << std::fixed
-            << std::setprecision(std::numeric_limits<double>::max_digits10);
-    }
-    
     // Prealocar vectores para termodinámicas
     int num_muestras_termo = (config.num_pasos + config.frecuencia_muestreo - 1) / config.frecuencia_muestreo;
     resultados.pasos.reserve(num_muestras_termo);
@@ -555,11 +562,6 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
         } catch (ErrorInestabilidadNumerica& e) {
             std::cout << "\n[CPP] ErrorInestabilidadNumerica capturado en paso " 
                     << paso << std::flush;
-            if (archivo_salida.has_value()) {
-                std::cout << "\n[CPP] Cerrando archivo..." << std::flush;
-                archivo_salida->close();
-                std::cout << "\n[CPP] Archivo cerrado." << std::flush;
-            }
             std::cout << "\n[CPP] Relanzando excepción..." << std::flush;
             throw;
         }
@@ -577,7 +579,6 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             const double tiempo        = paso * dt;
             const double energia_total = sistema.energia_potencial + sistema.energia_cinetica;
             
-            // Guardar los datos en la estructura
             resultados.pasos.push_back(paso);
             resultados.tiempos.push_back(tiempo);
             resultados.temperaturas.push_back(sistema.temperatura_inst);
@@ -585,26 +586,6 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
             resultados.energias_potenciales.push_back(sistema.energia_potencial);
             resultados.energias_cineticas.push_back(sistema.energia_cinetica);
             resultados.energias_totales.push_back(energia_total);
-            
-            // Escribir al archivo si está abierto
-            if (out) {
-                char linea[256];
-                int len = std::snprintf(
-                    linea,
-                    sizeof(linea),
-                    "%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
-                    paso, tiempo,
-                    sistema.temperatura_inst,
-                    sistema.presion_inst,
-                    sistema.energia_potencial,
-                    sistema.energia_cinetica,
-                    energia_total
-                );
-                
-                if (len > 0) {
-                    out -> write(linea, len);
-                };
-            }
         }
         
         // Muestreo de módulos de velocidad (solo si activado)
@@ -641,13 +622,7 @@ ResultadosSimulacion ArgonSimulator::ejecutar(const ConfiguracionSimulacion& con
     
     // Espaciar la barra de progreso
     std::cout << "\n";
-    
-    if (archivo_salida.has_value()) {
-        archivo_salida->close();
-        std::cout << "Simulación completada. Datos guardados en " << *nombre_archivo << std::endl;
-    } else {
-        std::cout << "Simulación completada. Resultados en memoria." << std::endl;
-    };
+    std::cout << "Simulación completada. Resultados en memoria." << std::endl;
     
     return resultados;  // Devolver los resultados estructurados
 }

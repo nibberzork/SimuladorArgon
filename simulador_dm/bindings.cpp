@@ -62,12 +62,10 @@ PYBIND11_MODULE(simulador, m) {
              py::arg("corregir_cm") = true,
              py::arg("correccion_presion_cola") = true,
              py::arg("reescalar_velocidades") = true)
-        .def("ejecutar", 
-            [](ArgonSimulator& self,
-               const ConfiguracionSimulacion& cfg,
-               const std::optional<std::string>& archivo) {
+        .def("ejecutar",
+            [](ArgonSimulator& self, const ConfiguracionSimulacion& cfg) {
                 try {
-                    return self.ejecutar(cfg, archivo);
+                    return self.ejecutar(cfg);
                 } catch (ErrorInestabilidadNumerica& e) {
                     std::cout << "\n[BIND] Excepción capturada en bindings, what(): " 
                             << e.what() << std::flush;
@@ -83,7 +81,5 @@ PYBIND11_MODULE(simulador, m) {
                     throw py::error_already_set();
                 }
             },
-            py::arg("config"),
-            py::arg("nombre_archivo") = py::none()
-        );
+            py::arg("config"));
 }

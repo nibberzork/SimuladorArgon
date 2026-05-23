@@ -17,6 +17,7 @@ pip-wheel-metadata/
 venv/
 env/
 ENV/
+.venv*
 
 # Test / type / lint caches
 .pytest_cache/

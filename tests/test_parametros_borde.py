@@ -15,7 +15,7 @@ from simulador_dm.analisis import (
 )
 
 
-OUTPUT_DIR = Path("tests/outputs")
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 COLUMNAS_ESPERADAS = [
     "paso",
     "tiempo",
